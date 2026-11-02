@@ -17,8 +17,12 @@ function nextMessage(ws: WebSocket): Promise<Record<string, unknown>> {
   });
 }
 
-async function open(code: string): Promise<{ ws: WebSocket; welcome: Record<string, unknown> }> {
-  const response = await exports.default.fetch(`http://example.com/ws/${code}`, {
+async function open(
+  code: string,
+  role?: "offerer" | "answerer",
+): Promise<{ ws: WebSocket; welcome: Record<string, unknown> }> {
+  const query = role ? `?role=${role}` : "";
+  const response = await exports.default.fetch(`http://example.com/ws/${code}${query}`, {
     headers: { Upgrade: "websocket" },
   });
   if (response.status !== 101 || !response.webSocket) {
@@ -80,6 +84,18 @@ describe("signaling relay", () => {
     offerer.ws.close(1000, "done");
     expect(await left).toEqual({ type: "peer-left", peerCount: 1 });
     answerer.ws.close(1000, "done");
+  });
+
+  it("lets SPIKE_ROLE override join order", async () => {
+    const code = room();
+    const first = await open(code, "answerer");
+    expect(first.welcome).toEqual({ type: "welcome", role: "answerer", peerCount: 1 });
+    const joined = nextMessage(first.ws);
+    const second = await open(code, "offerer");
+    expect(second.welcome).toEqual({ type: "welcome", role: "offerer", peerCount: 2 });
+    expect(await joined).toEqual({ type: "peer-joined", peerCount: 2 });
+    first.ws.close();
+    second.ws.close();
   });
 
   it("refuses a third peer", async () => {

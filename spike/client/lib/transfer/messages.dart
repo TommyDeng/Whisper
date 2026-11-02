@@ -10,12 +10,39 @@ class TextSpike extends SpikeMessage {
   final String body;
 }
 
+class TextAckSpike extends SpikeMessage {
+  const TextAckSpike(this.body);
+
+  final String body;
+}
+
 class FileStartSpike extends SpikeMessage {
-  const FileStartSpike({required this.id, required this.name, required this.size});
+  const FileStartSpike({
+    required this.id,
+    required this.name,
+    required this.size,
+    required this.chunkSize,
+    required this.chunks,
+  });
 
   final String id;
   final String name;
   final int size;
+  final int chunkSize;
+  final int chunks;
+}
+
+class FileStartAckSpike extends SpikeMessage {
+  const FileStartAckSpike(this.id);
+
+  final String id;
+}
+
+class FileNakSpike extends SpikeMessage {
+  const FileNakSpike(this.id, this.missing);
+
+  final String id;
+  final List<int> missing;
 }
 
 class FileEndSpike extends SpikeMessage {
@@ -50,8 +77,29 @@ class UnknownSpike extends SpikeMessage {
 
 String encodeText(String body) => jsonEncode({'t': 'text', 'body': body});
 
-String encodeFileStart({required String id, required String name, required int size}) {
-  return jsonEncode({'t': 'file-start', 'id': id, 'name': name, 'size': size});
+String encodeTextAck(String body) => jsonEncode({'t': 'text-ack', 'body': body});
+
+String encodeFileStart({
+  required String id,
+  required String name,
+  required int size,
+  required int chunkSize,
+  required int chunks,
+}) {
+  return jsonEncode({
+    't': 'file-start',
+    'id': id,
+    'name': name,
+    'size': size,
+    'chunkSize': chunkSize,
+    'chunks': chunks,
+  });
+}
+
+String encodeFileStartAck(String id) => jsonEncode({'t': 'file-start-ack', 'id': id});
+
+String encodeFileNak({required String id, required List<int> missing}) {
+  return jsonEncode({'t': 'file-nak', 'id': id, 'missing': missing});
 }
 
 String encodeFileEnd({required String id, required String sha256, required int submitMillis}) {
@@ -88,12 +136,41 @@ SpikeMessage parseSpikeMessage(String raw) {
       final body = decoded['body'];
       if (body is! String) return UnknownSpike(raw);
       return TextSpike(body);
+    case 'text-ack':
+      final body = decoded['body'];
+      if (body is! String) return UnknownSpike(raw);
+      return TextAckSpike(body);
     case 'file-start':
       final id = decoded['id'];
       final name = decoded['name'];
       final size = decoded['size'];
-      if (id is! String || name is! String || size is! int || size < 0) return UnknownSpike(raw);
-      return FileStartSpike(id: id, name: name, size: size);
+      final chunkSize = decoded['chunkSize'];
+      final chunks = decoded['chunks'];
+      if (id is! String ||
+          name is! String ||
+          size is! int ||
+          size < 0 ||
+          chunkSize is! int ||
+          chunkSize <= 0 ||
+          chunks is! int ||
+          chunks < 0) {
+        return UnknownSpike(raw);
+      }
+      return FileStartSpike(id: id, name: name, size: size, chunkSize: chunkSize, chunks: chunks);
+    case 'file-start-ack':
+      final id = decoded['id'];
+      if (id is! String) return UnknownSpike(raw);
+      return FileStartAckSpike(id);
+    case 'file-nak':
+      final id = decoded['id'];
+      final missing = decoded['missing'];
+      if (id is! String || missing is! List) return UnknownSpike(raw);
+      final sequences = <int>[];
+      for (final item in missing) {
+        if (item is! int || item < 0) return UnknownSpike(raw);
+        sequences.add(item);
+      }
+      return FileNakSpike(id, sequences);
     case 'file-end':
       final id = decoded['id'];
       final sha = decoded['sha256'];

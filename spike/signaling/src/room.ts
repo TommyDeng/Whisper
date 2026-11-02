@@ -38,8 +38,8 @@ export class RoomDO extends DurableObject<Env> {
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
 
-    const hasOfferer = existing.some((ws) => attachmentOf(ws)?.role === "offerer");
-    const role: Role = hasOfferer ? "answerer" : "offerer";
+    const requested = new URL(request.url).searchParams.get("role");
+    const role = assignRole(existing, requested);
     const attachment: Attachment = {
       id: crypto.randomUUID(),
       role,
@@ -106,6 +106,15 @@ export class RoomDO extends DurableObject<Env> {
       // The socket is already closing.
     }
   }
+}
+
+export function assignRole(existing: WebSocket[], requested: string | null): Role {
+  const hasOfferer = existing.some((ws) => attachmentOf(ws)?.role === "offerer");
+  const hasAnswerer = existing.some((ws) => attachmentOf(ws)?.role === "answerer");
+  if (requested === "offerer" && !hasOfferer) return "offerer";
+  if (requested === "answerer" && !hasAnswerer) return "answerer";
+  if (!hasOfferer) return "offerer";
+  return "answerer";
 }
 
 function attachmentOf(ws: WebSocket): Attachment | null {

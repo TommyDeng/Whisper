@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:whisper_webrtc_spike/session/autorun_config.dart';
 import 'package:whisper_webrtc_spike/session/rtc_config.dart';
 import 'package:whisper_webrtc_spike/signaling/address.dart';
 import 'package:whisper_webrtc_spike/signaling/events.dart';
@@ -8,6 +9,10 @@ import 'package:whisper_webrtc_spike/signaling/events.dart';
 void main() {
   test('builds a room websocket url and a health url', () {
     expect(buildSignalingUrl('ws://127.0.0.1:8787', 'AB12CD'), 'ws://127.0.0.1:8787/ws/AB12CD');
+    expect(
+      buildSignalingUrl('ws://127.0.0.1:8787', 'AB12CD', role: 'offerer'),
+      'ws://127.0.0.1:8787/ws/AB12CD?role=offerer',
+    );
     expect(buildSignalingUrl('ws://10.0.0.8:8787/ws/', 'room_1'), 'ws://10.0.0.8:8787/ws/room_1');
     expect(healthUrlFor('ws://10.0.0.8:8787'), 'http://10.0.0.8:8787/health');
     expect(healthUrlFor('wss://chat.example/ws'), 'https://chat.example/health');
@@ -49,5 +54,14 @@ void main() {
     expect(candidate, isA<SignalCandidateEvent>().having((event) => event.sdpMid, 'mid', '0'));
     expect(parseServerEvent('{"type":"signal","kind":"bye"}'), isA<SignalByeEvent>());
     expect(parseServerEvent('{'), isA<IgnoredEvent>());
+  });
+
+  test('autorun role and result paths are deterministic', () {
+    expect(preferredAutorunRole(spikeRole: 'answerer', hasSpikeBytes: true), 'answerer');
+    expect(preferredAutorunRole(hasSpikeBytes: true), 'offerer');
+    expect(preferredAutorunRole(), isNull);
+    expect(autorunResultPath(spikeResult: r'C:\temp\a.json', role: 'answerer'), r'C:\temp\a.json');
+    expect(autorunResultPath(role: 'offerer'), 'spike-result-offerer.json');
+    expect(autorunResultPath(role: 'answerer'), 'spike-result-answerer.json');
   });
 }

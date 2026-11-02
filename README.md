@@ -56,7 +56,7 @@ flutter run -d linux
    - **ZeroTier**：本机 host 地址落在 `zt*` 或描述里带 ZeroTier 的网卡上
    - **公网 P2P**：选中的是 srflx 或 prflx
    - **中继**：选中的是 relay。本 spike 没有配置 TURN，正常测试不应出现；显示逻辑留给后面的 `feat/turn`
-5. 在数据通道打开后发送一句文字，再发送 1 / 8 / 32 MiB 测试文件，或选一个不超过 256 MiB 的本地文件。界面上的 MiB/s 是**接收端**从第一块到收完的耗时；「提交耗时」含发送端背压等待，不含对端确认。
+5. 在数据通道打开后发送一句文字，再发送 1 / 8 / 32 MiB 测试文件，或选一个不超过 256 MiB 的本地文件。发送端会先等 `file-start-ack`，再送带序号的二进制帧；缺块会按 `file-nak` 重传。界面上的 MiB/s 是**接收端**从开始接收到校验完成的耗时。
 6. 挂断后再点「重新呼叫」只会由 offerer 发起。
 
 可选自检：点「健康检查」，应看到 `{"ok":true,"service":"whisper-webrtc-spike"}`。
@@ -80,12 +80,15 @@ flutter run -d linux
 ```bash
 cd spike/signaling && npm run dev
 # 另开两个终端，工作目录都是 spike/client
-SPIKE_AUTORUN=1 SPIKE_URL=ws://127.0.0.1:8787 SPIKE_ROOM=autorun1 \
+SPIKE_AUTORUN=1 SPIKE_ROLE=offerer SPIKE_URL=ws://127.0.0.1:8787 SPIKE_ROOM=autorun1 \
   SPIKE_BYTES=8388608 SPIKE_RESULT=/tmp/spike-offerer.json \
   flutter run -d linux
-SPIKE_AUTORUN=1 SPIKE_URL=ws://127.0.0.1:8787 SPIKE_ROOM=autorun1 \
+SPIKE_AUTORUN=1 SPIKE_ROLE=answerer SPIKE_URL=ws://127.0.0.1:8787 SPIKE_ROOM=autorun1 \
+  SPIKE_RESULT=/tmp/spike-answerer.json \
   flutter run -d linux
 ```
+
+`SPIKE_ROLE` 不填时，设置了 `SPIKE_BYTES` 的一侧会请求当 offerer，后加入房间也可以当主叫。两边都会写结果 JSON：有 `SPIKE_RESULT` 就写到那个路径，否则写当前目录的 `spike-result-offerer.json` / `spike-result-answerer.json`。offerer 的 `textAck` 表示收到了文字回执；answerer 的 `helloSeen` / `textAckSent` 表示收到了测试文字并且发出了回执。
 
 ### 这次 spike 已经能确定的事
 
@@ -95,7 +98,7 @@ SPIKE_AUTORUN=1 SPIKE_URL=ws://127.0.0.1:8787 SPIKE_ROOM=autorun1 \
 - 有 PulseAudio 时双方都能打开麦克风并收到远端音频。DTLS 状态是 `connected`，密码套件 `TLS_AES_128_GCM_SHA256`，SRTP 是 `AES_CM_128_HMAC_SHA1_80`。
 - 选中的路径是局域网 host `172.30.0.2`。日志里只发布了 `lan` 候选，连通后调度器停在「不再发布更低优先级候选」。回环和 srflx 没有发给对端。
 - 同一条可靠有序 DataChannel 上，8 MiB 的接收端吞吐：8 KiB 分块约 **2.9 MiB/s**（2773 ms），16 KiB 约 **5.0 MiB/s**（1606 ms），64 KiB 约 **5.1 MiB/s**（1561 ms）。16 KiB 和 64 KiB 大约是 43 Mbit/s，离虚拟机网卡和千兆局域网都还很远。分块再小，平台通道往返更明显。大文件仍要按架构文档评估 QUIC/TCP，不要假设 DataChannel 能吃满链路。
-- 桌面端即使把 DataChannel 设成 ordered，二进制块仍可能排到 `file-start` 前面。接收端会先攒这些块，等文件头到了再计入，并在字节数凑齐之前不结束。这是实测到的行为，不是猜测。
+- 桌面 DataChannel 即使标成 ordered，帧仍可能乱序或少一块。文件改成「先等 file-start-ack，再送 `WSP1` + 序号 + 载荷」，缺的序号用 `file-nak` 重传。不要靠「文件头之前先到的块」来补洞。
 - `flutter_webrtc` 1.6.3 没有改本机 ICE agent 优先级的接口。改写发出去的 priority 只影响对端看到的优先级。真正把局域网排到 ZeroTier 前面的是候选门闩：先只发局域网 host，没有局域网才发 ZeroTier，连通后封住。ZeroTier 网卡（Linux `zt*`，Windows 描述里的 ZeroTier）的分类和这套门闩有单元测试。这台机器没有 ZeroTier，所以「局域网和 ZeroTier 同时存在时选谁」还没有在真网上打过。
 - 桌面 C++ observer 只有 `OnStateChange` 和 `OnMessage`，没有 `OnBufferedAmountChange`（`flutter_webrtc` 1.6.3 的 `common/cpp`）。`onBufferedAmountLow` 不会响。发送端每攒够约 1 MiB 就轮询 `getBufferedAmount()`。
 - 没有 PulseAudio/PipeWire 设备时，libwebrtc 在 `adm_helpers.cc` 里直接 `Abort`（`adm->Init()` 失败），Dart 抓不到。Linux 上要有可用的音频服务，光有数据通道也不行。

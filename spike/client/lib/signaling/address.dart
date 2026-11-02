@@ -8,7 +8,7 @@ String generateRoomCode(Random random) {
   return List.generate(6, (_) => roomAlphabet[random.nextInt(roomAlphabet.length)]).join();
 }
 
-String buildSignalingUrl(String base, String room) {
+String buildSignalingUrl(String base, String room, {String? role}) {
   final trimmedRoom = room.trim();
   if (!roomCodePattern.hasMatch(trimmedRoom)) {
     throw const FormatException('房间码需要 4–32 位字母、数字、下划线或连字符');
@@ -34,7 +34,9 @@ String buildSignalingUrl(String base, String room) {
     final trimmed = path.endsWith('/') ? path.substring(0, path.length - 1) : path;
     nextPath = '$trimmed/ws/$encoded';
   }
-  return _withPath(uri, nextPath);
+  final built = _withPath(uri, nextPath);
+  if (role != 'offerer' && role != 'answerer') return built;
+  return Uri.parse(built).replace(queryParameters: {'role': role}).toString();
 }
 
 String healthUrlFor(String base) {

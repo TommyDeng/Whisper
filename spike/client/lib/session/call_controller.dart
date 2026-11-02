@@ -2,9 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
-import 'package:convert/convert.dart';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -17,8 +16,9 @@ import '../ice/scheduler.dart';
 import '../signaling/address.dart';
 import '../signaling/events.dart';
 import '../transfer/bytes.dart';
-import '../transfer/chunk_pump.dart';
+import '../transfer/frames.dart';
 import '../transfer/messages.dart';
+import 'autorun_config.dart';
 import 'rtc_config.dart';
 
 const maxSpikeFileBytes = 256 * 1024 * 1024;
@@ -84,11 +84,20 @@ class CallController extends ChangeNotifier {
   bool _autorunFinished = false;
   int _autorunBytes = 8 * 1024 * 1024;
   String? _autorunResult;
+  String? _preferredRole;
   bool textAckSeen = false;
+  bool textAckSent = false;
+  bool _helloSeen = false;
+  int _retransmittedFrames = 0;
   Completer<void>? _drainWaiter;
-  _IncomingFile? _incoming;
-  final List<Uint8List> _earlyBinary = [];
-  Timer? _lateChunkTimer;
+  _Receive? _receive;
+  final Map<int, Uint8List> _earlyFrames = {};
+  final Map<int, int> _resendCount = {};
+  List<Uint8List>? _sentPayloads;
+  String? _sendingId;
+  Completer<void>? _startAck;
+  Completer<void>? _textAck;
+  Completer<FileResultSpike>? _fileResult;
   String? _rejectId;
 
   Future<void> refreshNics() async {
@@ -110,8 +119,15 @@ class CallController extends ChangeNotifier {
     _autorun = true;
     signalingUrl = Platform.environment['SPIKE_URL'] ?? signalingUrl;
     roomCode = Platform.environment['SPIKE_ROOM'] ?? 'autorun1';
-    _autorunBytes = int.tryParse(Platform.environment['SPIKE_BYTES'] ?? '') ?? _autorunBytes;
+    final bytesEnv = Platform.environment['SPIKE_BYTES'];
+    if (bytesEnv != null && bytesEnv.isNotEmpty) {
+      _autorunBytes = int.tryParse(bytesEnv) ?? _autorunBytes;
+    }
     _autorunResult = Platform.environment['SPIKE_RESULT'];
+    _preferredRole = preferredAutorunRole(
+      spikeRole: Platform.environment['SPIKE_ROLE'],
+      hasSpikeBytes: bytesEnv != null && bytesEnv.isNotEmpty,
+    );
     final chunk = int.tryParse(Platform.environment['SPIKE_CHUNK'] ?? '');
     if (chunk != null && chunk >= 1024) chunkSize = chunk;
     final seconds = int.tryParse(Platform.environment['SPIKE_FALLBACK_SECONDS'] ?? '');
@@ -128,7 +144,7 @@ class CallController extends ChangeNotifier {
 
   Future<void> connect() async {
     if (signalingState == '已连接' || signalingState == '连接中') return;
-    final url = buildSignalingUrl(signalingUrl, roomCode);
+    final url = buildSignalingUrl(signalingUrl, roomCode, role: _preferredRole);
     signalingState = '连接中';
     log('连接 $url');
     _notify();
@@ -188,7 +204,7 @@ class CallController extends ChangeNotifier {
 
   Future<void> recall() async {
     if (role != 'offerer') {
-      log('只有先进入房间的一方可以重新呼叫');
+      log('只有 offerer 可以重新呼叫');
       return;
     }
     await _closePeer();
@@ -237,30 +253,117 @@ class CallController extends ChangeNotifier {
       log('数据通道还没打开');
       return;
     }
+    final payloads = await _collectPayloads(chunks, size);
     final id = _newId();
-    final output = AccumulatorSink<Digest>();
-    final input = sha256.startChunkedConversion(output);
-    final clock = Stopwatch()..start();
+    _sendingId = id;
+    _sentPayloads = payloads;
+    _resendCount.clear();
+    _retransmittedFrames = 0;
+    final startAck = Completer<void>();
+    _startAck = startAck;
+    final resultWait = Completer<FileResultSpike>();
+    _fileResult = resultWait;
     try {
-      await _sendDcText(encodeFileStart(id: id, name: name, size: size));
-      final pump = ChunkPump(
+      final start = encodeFileStart(
+        id: id,
+        name: name,
+        size: size,
         chunkSize: chunkSize,
-        sendBinary: (bytes) => channel.send(RTCDataChannelMessage.fromBinary(bytes)),
-        bufferedAmount: channel.getBufferedAmount,
-        waitForDrain: _waitForDrain,
+        chunks: payloads.length,
       );
-      await pump.send(chunks, onChunk: input.add);
-      input.close();
-      output.close();
-      final digest = output.events.single.toString();
+      var acked = false;
+      for (var attempt = 0; attempt < 5 && !acked; attempt++) {
+        await _sendDcText(start);
+        try {
+          await startAck.future.timeout(const Duration(seconds: 2));
+          acked = true;
+        } on TimeoutException {
+          log('还没收到 file-start-ack，重发文件头');
+        }
+      }
+      if (!acked) throw StateError('对端没有确认文件头');
+      final clock = Stopwatch()..start();
+      await _sendFrames(payloads, List<int>.generate(payloads.length, (index) => index));
       clock.stop();
       lastSubmitMillis = clock.elapsedMilliseconds;
+      final digest = ChunkAssembler.hashPayloads(payloads);
       await _sendDcText(encodeFileEnd(id: id, sha256: digest, submitMillis: lastSubmitMillis!));
-      log('文件已提交 $name，$size 字节，提交耗时 $lastSubmitMillis ms（含背压，不含对端确认）');
+      log('文件已提交 $name，$size 字节，${payloads.length} 块，提交耗时 $lastSubmitMillis ms');
+      final result = await resultWait.future.timeout(const Duration(seconds: 60));
+      if (!result.ok) {
+        log('对端校验失败');
+      }
     } catch (error) {
-      input.close();
       log('发送文件失败：$error');
       if (_autorun) await _finishAutorun(2, {'error': '$error'});
+    } finally {
+      if (identical(_startAck, startAck)) _startAck = null;
+      if (identical(_fileResult, resultWait) && !resultWait.isCompleted) {
+        _fileResult = null;
+      }
+      _sendingId = null;
+      _sentPayloads = null;
+    }
+  }
+
+  Future<List<Uint8List>> _collectPayloads(Stream<List<int>> chunks, int size) async {
+    final payloads = <Uint8List>[];
+    final pending = BytesBuilder(copy: false);
+    var total = 0;
+    await for (final raw in chunks) {
+      pending.add(raw);
+      total += raw.length;
+      if (total > maxSpikeFileBytes) {
+        throw StateError('文件超过 spike 上限');
+      }
+      var buffered = pending.toBytes();
+      var offset = 0;
+      while (buffered.length - offset >= chunkSize) {
+        payloads.add(Uint8List.fromList(buffered.sublist(offset, offset + chunkSize)));
+        offset += chunkSize;
+      }
+      pending
+        ..clear()
+        ..add(buffered.sublist(offset));
+    }
+    final tail = pending.toBytes();
+    if (tail.isNotEmpty) payloads.add(Uint8List.fromList(tail));
+    final got = payloads.fold<int>(0, (sum, chunk) => sum + chunk.length);
+    if (got != size) {
+      throw StateError('读到 $got 字节，文件头声明 $size');
+    }
+    if (payloads.length != chunkCountFor(size, chunkSize)) {
+      throw StateError('分块数量不一致');
+    }
+    return payloads;
+  }
+
+  Future<void> _sendFrames(List<Uint8List> payloads, List<int> sequences) async {
+    final channel = _dc;
+    if (channel == null) throw StateError('数据通道已关闭');
+    var queued = 0;
+    for (final sequence in sequences) {
+      if (sequence < 0 || sequence >= payloads.length) continue;
+      final frame = encodeChunkFrame(sequence, payloads[sequence]);
+      await channel.send(RTCDataChannelMessage.fromBinary(frame));
+      queued += frame.length;
+      if (queued >= 1024 * 1024) {
+        await _waitUntilBuffered(channel, 256 * 1024);
+        queued = await channel.getBufferedAmount();
+      }
+    }
+    await _waitUntilBuffered(channel, 256 * 1024);
+  }
+
+  Future<void> _waitUntilBuffered(RTCDataChannel channel, int lowWater) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 30));
+    var amount = await channel.getBufferedAmount();
+    while (amount > lowWater) {
+      if (DateTime.now().isAfter(deadline)) {
+        throw StateError('数据通道发送缓冲在 30 秒内没有降下来');
+      }
+      await _waitForDrain();
+      amount = await channel.getBufferedAmount();
     }
   }
 
@@ -271,7 +374,7 @@ class CallController extends ChangeNotifier {
     _tick?.cancel();
     _stats?.cancel();
     _autorunTimer?.cancel();
-    _lateChunkTimer?.cancel();
+    _receive?.nakTimer?.cancel();
     unawaited(_sub?.cancel());
     unawaited(_channel?.sink.close());
     unawaited(_closePeer());
@@ -503,12 +606,28 @@ class CallController extends ChangeNotifier {
     log('数据通道已打开');
     if (_autorun && role == 'offerer' && !_autorunSent) {
       _autorunSent = true;
-      final sent = await sendText('spike-hello');
-      if (!sent) {
-        await _finishAutorun(2, {'error': 'text send failed'});
-        return;
-      }
+      final acked = await _helloAndWaitForAck();
+      if (!acked) log('文字回执超时，仍继续传文件');
       await sendTestPayload(_autorunBytes);
+    }
+  }
+
+  Future<bool> _helloAndWaitForAck() async {
+    final wait = Completer<void>();
+    _textAck = wait;
+    final sent = await sendText('spike-hello');
+    if (!sent) {
+      _textAck = null;
+      await _finishAutorun(2, {'error': 'text send failed'});
+      return false;
+    }
+    try {
+      await wait.future.timeout(const Duration(seconds: 5));
+      return true;
+    } on TimeoutException {
+      return textAckSeen;
+    } finally {
+      if (identical(_textAck, wait)) _textAck = null;
     }
   }
 
@@ -519,60 +638,48 @@ class CallController extends ChangeNotifier {
         chat.insert(0, '对方：$body');
         if (chat.length > 100) chat.removeLast();
         log('收到文字');
-        if (body == 'ack:spike-hello') textAckSeen = true;
+        if (body == 'ack:spike-hello') _noteTextAck();
         if (_autorun && role == 'answerer' && body == 'spike-hello') {
-          await sendText('ack:spike-hello');
+          _helloSeen = true;
+          unawaited(_sendTextAck());
         }
-      case FileStartSpike(:final id, :final name, :final size):
-        await _incoming?.abandon();
-        if (size > maxSpikeFileBytes) {
-          _rejectId = id;
-          _incoming = null;
-          log('拒收 $name：超过 spike 上限');
-          break;
+      case TextAckSpike(:final body):
+        log('收到文字回执');
+        if (body == 'spike-hello') _noteTextAck();
+      case FileStartSpike(:final id, :final name, :final size, :final chunkSize, :final chunks):
+        await _beginReceive(id: id, name: name, size: size, chunkSize: chunkSize, chunks: chunks);
+      case FileStartAckSpike(:final id):
+        if (id == _sendingId && _startAck != null && !_startAck!.isCompleted) {
+          _startAck!.complete();
         }
-        _rejectId = null;
-        final incoming = await _IncomingFile.begin(id: id, name: name, size: size);
-        _incoming = incoming;
-        for (final chunk in _earlyBinary) {
-          incoming.add(chunk);
-        }
-        if (_earlyBinary.isNotEmpty) {
-          log('补上 file-start 之前到达的 ${_earlyBinary.length} 个数据块');
-        }
-        _earlyBinary.clear();
-        log('开始接收 $name（$size 字节）');
-        _scheduleReceiveComplete();
+      case FileNakSpike(:final id, :final missing):
+        if (id == _sendingId) unawaited(_retransmit(missing));
       case FileEndSpike(:final id, :final sha256, :final submitMillis):
-        if (_rejectId == id) {
-          await _sendDcText(
-            encodeFileResult(id: id, ok: false, bytes: 0, millis: 0, sha256: ''),
-          );
-          _rejectId = null;
-          break;
-        }
-        final incoming = _incoming;
-        if (incoming == null || incoming.id != id || incoming.completing) {
+        final receive = _receive;
+        if (receive == null || receive.id != id) {
           log('收到无法匹配的 file-end');
           break;
         }
-        incoming.endSha256 = sha256;
-        incoming.endSubmitMillis = submitMillis;
-        _scheduleReceiveComplete();
-      case FileResultSpike(:final ok, :final bytes, :final millis, :final sha256):
-        lastHashOk = ok;
-        lastBytes = bytes;
-        lastReceiveMillis = millis;
-        lastMibps = millis == 0 ? null : bytes / 1024 / 1024 / (millis / 1000);
-        log('对端确认 ${ok ? '通过' : '失败'}，$bytes 字节，$millis ms，${lastMibps?.toStringAsFixed(2) ?? '—'} MiB/s');
+        receive.endSha256 = sha256;
+        receive.endSubmitMillis = submitMillis;
+        _considerReceive();
+      case final FileResultSpike result:
+        lastHashOk = result.ok;
+        lastBytes = result.bytes;
+        lastReceiveMillis = result.millis;
+        lastMibps = result.millis == 0 ? null : result.bytes / 1024 / 1024 / (result.millis / 1000);
+        log('对端确认 ${result.ok ? '通过' : '失败'}，${result.bytes} 字节，${result.millis} ms，${lastMibps?.toStringAsFixed(2) ?? '—'} MiB/s');
+        final waiting = _fileResult;
+        if (waiting != null && !waiting.isCompleted) waiting.complete(result);
         if (_autorun && role == 'offerer') {
-          await _finishAutorun(ok ? 0 : 2, {
-            'bytes': bytes,
-            'receiverMillis': millis,
+          await _finishAutorun(result.ok ? 0 : 2, {
+            'bytes': result.bytes,
+            'receiverMillis': result.millis,
             'mibPerSec': lastMibps,
-            'sha256Ok': ok,
-            'sha256': sha256,
+            'sha256Ok': result.ok,
+            'sha256': result.sha256,
             'submitMillis': lastSubmitMillis,
+            'retransmittedFrames': _retransmittedFrames,
           });
         }
       case UnknownSpike():
@@ -581,68 +688,172 @@ class CallController extends ChangeNotifier {
     _notify();
   }
 
+  void _noteTextAck() {
+    textAckSeen = true;
+    final wait = _textAck;
+    if (wait != null && !wait.isCompleted) wait.complete();
+    _notify();
+  }
+
+  Future<void> _sendTextAck() async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        await _sendDcText(encodeTextAck('spike-hello'));
+        textAckSent = true;
+      } catch (error) {
+        log('文字回执发送失败，重试：$error');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    log('已发送文字回执');
+  }
+
+  Future<void> _beginReceive({
+    required String id,
+    required String name,
+    required int size,
+    required int chunkSize,
+    required int chunks,
+  }) async {
+    _receive?.nakTimer?.cancel();
+    if (size > maxSpikeFileBytes || chunks != chunkCountFor(size, chunkSize)) {
+      _rejectId = id;
+      _receive = null;
+      log('拒收 $name：大小或分块数量不对');
+      await _sendDcText(encodeFileResult(id: id, ok: false, bytes: 0, millis: 0, sha256: ''));
+      return;
+    }
+    _rejectId = null;
+    final receive = _Receive(
+      id: id,
+      name: name,
+      assembler: ChunkAssembler(size: size, chunkSize: chunkSize),
+    );
+    _receive = receive;
+    var applied = 0;
+    for (final entry in _earlyFrames.entries) {
+      final frame = decodeChunkFrame(entry.value);
+      if (frame != null && receive.assembler.addFrame(frame)) applied++;
+    }
+    _earlyFrames.clear();
+    if (applied > 0) log('按序号放入文件头之前到达的 $applied 块');
+    log('开始接收 $name（$size 字节，$chunks 块）');
+    await _sendDcText(encodeFileStartAck(id));
+    _considerReceive();
+  }
+
   void _onBinary(Uint8List bytes) {
     if (_rejectId != null) return;
-    final incoming = _incoming;
-    if (incoming == null || incoming.completing) {
-      _earlyBinary.add(Uint8List.fromList(bytes));
+    final copy = Uint8List.fromList(bytes);
+    final frame = decodeChunkFrame(copy);
+    if (frame == null) {
+      log('忽略无法识别的二进制帧');
       return;
     }
-    incoming.add(bytes);
-    _scheduleReceiveComplete();
-  }
-
-  void _scheduleReceiveComplete() {
-    final incoming = _incoming;
-    if (incoming == null || incoming.endSha256 == null || incoming.completing) return;
-    _lateChunkTimer?.cancel();
-    if (incoming.bytes < incoming.size) {
-      // file-end can arrive before the last binary chunks. Each new chunk
-      // resets this, so a slow transfer is not cut off.
-      _lateChunkTimer = Timer(const Duration(seconds: 2), () {
-        unawaited(_completeIncoming(force: true));
-      });
+    final receive = _receive;
+    if (receive == null || receive.finishing) {
+      _earlyFrames[frame.sequence] = copy;
       return;
     }
-    _lateChunkTimer = null;
-    unawaited(_completeIncoming(force: false));
+    receive.assembler.addFrame(frame);
+    _considerReceive();
   }
 
-  Future<void> _completeIncoming({required bool force}) async {
-    final incoming = _incoming;
-    if (incoming == null || incoming.completing || incoming.endSha256 == null) return;
-    if (!force && incoming.bytes < incoming.size) return;
-    incoming.completing = true;
-    _lateChunkTimer?.cancel();
-    _lateChunkTimer = null;
-    _incoming = null;
-    final submitMillis = incoming.endSubmitMillis ?? 0;
-    final result = await incoming.finish(expectedSha256: incoming.endSha256!);
-    lastReceiveMillis = result.millis;
-    lastBytes = result.bytes;
-    lastHashOk = result.ok;
-    lastMibps = result.millis == 0 ? null : result.bytes / 1024 / 1024 / (result.millis / 1000);
-    receivePath = result.path;
+  void _considerReceive() {
+    final receive = _receive;
+    if (receive == null || receive.finishing || receive.endSha256 == null) return;
+    if (receive.assembler.complete) {
+      unawaited(_finishReceive(giveUp: false));
+      return;
+    }
+    if (receive.nakTimer != null) return;
+    unawaited(_nakReceive());
+    receive.nakTimer = Timer.periodic(const Duration(milliseconds: 400), (_) {
+      unawaited(_nakReceive());
+    });
+  }
+
+  Future<void> _nakReceive() async {
+    final receive = _receive;
+    if (receive == null || receive.finishing || receive.endSha256 == null) return;
+    if (receive.assembler.complete) {
+      await _finishReceive(giveUp: false);
+      return;
+    }
+    receive.naks += 1;
+    final missing = receive.assembler.missingSequences();
+    log('缺少 ${missing.length} 块，请求重传');
+    await _sendDcText(encodeFileNak(id: receive.id, missing: missing));
+    if (receive.naks >= 8) {
+      await _finishReceive(giveUp: true);
+    }
+  }
+
+  Future<void> _retransmit(List<int> missing) async {
+    final payloads = _sentPayloads;
+    if (payloads == null || missing.isEmpty) return;
+    final todo = <int>[];
+    for (final sequence in missing) {
+      final count = (_resendCount[sequence] ?? 0) + 1;
+      if (count > 8) continue;
+      _resendCount[sequence] = count;
+      todo.add(sequence);
+    }
+    if (todo.isEmpty) return;
+    _retransmittedFrames += todo.length;
+    log('重传 ${todo.length} 块');
+    await _sendFrames(payloads, todo);
+  }
+
+  Future<void> _finishReceive({required bool giveUp}) async {
+    final receive = _receive;
+    if (receive == null || receive.finishing) return;
+    if (!giveUp && !receive.assembler.complete) return;
+    receive.finishing = true;
+    receive.nakTimer?.cancel();
+    _receive = null;
+    final submitMillis = receive.endSubmitMillis ?? 0;
+    String digest = '';
+    var ok = false;
+    String? path;
+    if (receive.assembler.complete) {
+      final dir = await Directory.systemTemp.createTemp('whisper-spike-');
+      path = '${dir.path}/${safeFileName(receive.name)}';
+      final sink = File(path).openWrite();
+      digest = receive.assembler.writeAndHash(sink);
+      await sink.flush();
+      await sink.close();
+      ok = digest == receive.endSha256 && receive.assembler.receivedPayloadBytes == receive.assembler.size;
+    }
+    final millis = receive.clock.elapsedMilliseconds;
+    lastReceiveMillis = millis;
+    lastBytes = receive.assembler.receivedPayloadBytes;
+    lastHashOk = ok;
+    lastMibps = millis == 0 ? null : lastBytes! / 1024 / 1024 / (millis / 1000);
+    receivePath = path;
     log(
-      '接收完成 ${result.ok ? '校验通过' : '校验失败'}，${result.bytes} 字节，'
-      '${result.millis} ms，${lastMibps?.toStringAsFixed(2) ?? '—'} MiB/s，对端提交 $submitMillis ms',
+      '接收完成 ${ok ? '校验通过' : '校验失败'}，$lastBytes 字节，'
+      '$millis ms，${lastMibps?.toStringAsFixed(2) ?? '—'} MiB/s，对端提交 $submitMillis ms',
     );
     await _sendDcText(
       encodeFileResult(
-        id: incoming.id,
-        ok: result.ok,
-        bytes: result.bytes,
-        millis: result.millis,
-        sha256: result.sha256,
+        id: receive.id,
+        ok: ok,
+        bytes: receive.assembler.receivedPayloadBytes,
+        millis: millis,
+        sha256: digest,
       ),
     );
     if (_autorun && role == 'answerer') {
-      await Future<void>.delayed(const Duration(seconds: 1));
-      await _finishAutorun(result.ok ? 0 : 2, {
-        'bytes': result.bytes,
-        'receiverMillis': result.millis,
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      await _finishAutorun(ok ? 0 : 2, {
+        'bytes': lastBytes,
+        'receiverMillis': millis,
         'mibPerSec': lastMibps,
-        'sha256Ok': result.ok,
+        'sha256Ok': ok,
+        'sha256': digest,
+        'retransmittedFrames': _retransmittedFrames,
+        'helloSeen': _helloSeen,
       });
     }
     _notify();
@@ -655,11 +866,15 @@ class CallController extends ChangeNotifier {
   }
 
   Future<void> _sendDcText(String text) async {
-    final channel = _dc;
-    if (channel == null || channel.state != RTCDataChannelState.RTCDataChannelOpen) {
-      throw StateError('数据通道还没打开');
+    for (var attempt = 0; attempt < 25; attempt++) {
+      final channel = _dc;
+      if (channel != null && channel.state == RTCDataChannelState.RTCDataChannelOpen) {
+        await channel.send(RTCDataChannelMessage(text));
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 40));
     }
-    await channel.send(RTCDataChannelMessage(text));
+    throw StateError('数据通道还没打开');
   }
 
   void _flushCandidates() {
@@ -738,14 +953,14 @@ class CallController extends ChangeNotifier {
   Future<void> _closePeer() async {
     _tick?.cancel();
     _stats?.cancel();
-    _lateChunkTimer?.cancel();
-    _lateChunkTimer = null;
-    _earlyBinary.clear();
+    _receive?.nakTimer?.cancel();
+    _receive = null;
+    _earlyFrames.clear();
+    _sentPayloads = null;
+    _sendingId = null;
     _scheduler = null;
     _remoteSet = false;
     _pendingRemote.clear();
-    await _incoming?.abandon();
-    _incoming = null;
     final dc = _dc;
     _dc = null;
     final pc = _pc;
@@ -793,10 +1008,12 @@ class CallController extends ChangeNotifier {
       'nics': [for (final nic in nics) nic.label],
       ...extra,
     };
-    final path = _autorunResult;
-    if (path != null && path.isNotEmpty) {
-      await File(path).writeAsString(const JsonEncoder.withIndent('  ').convert(payload));
-    }
+    final path = autorunResultPath(spikeResult: _autorunResult, role: role);
+    payload['resultPath'] = path;
+    payload['preferredRole'] = _preferredRole;
+    payload['textAck'] = textAckSeen;
+    payload['textAckSent'] = textAckSent;
+    await File(path).writeAsString(const JsonEncoder.withIndent('  ').convert(payload));
     exit(code);
   }
 
@@ -825,61 +1042,16 @@ class CallController extends ChangeNotifier {
   }
 }
 
-class _IncomingFile {
-  _IncomingFile({
-    required this.id,
-    required this.size,
-    required this.path,
-    required this._sink,
-    required this._hash,
-    required this._output,
-  }) : _clock = Stopwatch()..start();
+class _Receive {
+  _Receive({required this.id, required this.name, required this.assembler}) : clock = Stopwatch()..start();
 
   final String id;
-  final int size;
-  final String path;
-  final IOSink _sink;
-  final ByteConversionSink _hash;
-  final AccumulatorSink<Digest> _output;
-  final Stopwatch _clock;
-  int bytes = 0;
+  final String name;
+  final ChunkAssembler assembler;
+  final Stopwatch clock;
   String? endSha256;
   int? endSubmitMillis;
-  bool completing = false;
-
-  static Future<_IncomingFile> begin({required String id, required String name, required int size}) async {
-    final dir = await Directory.systemTemp.createTemp('whisper-spike-');
-    final path = '${dir.path}/${safeFileName(name)}';
-    final sink = File(path).openWrite();
-    final output = AccumulatorSink<Digest>();
-    final hash = sha256.startChunkedConversion(output);
-    return _IncomingFile(id: id, size: size, path: path, sink: sink, hash: hash, output: output);
-  }
-
-  void add(Uint8List chunk) {
-    bytes += chunk.length;
-    _hash.add(chunk);
-    _sink.add(chunk);
-  }
-
-  Future<({bool ok, int bytes, int millis, String sha256, String path})> finish({
-    required String expectedSha256,
-  }) async {
-    _hash.close();
-    _output.close();
-    await _sink.flush();
-    await _sink.close();
-    _clock.stop();
-    final digest = _output.events.single.toString();
-    final ok = digest == expectedSha256 && bytes == size;
-    return (ok: ok, bytes: bytes, millis: _clock.elapsedMilliseconds, sha256: digest, path: path);
-  }
-
-  Future<void> abandon() async {
-    try {
-      _hash.close();
-      _output.close();
-      await _sink.close();
-    } catch (_) {}
-  }
+  int naks = 0;
+  Timer? nakTimer;
+  bool finishing = false;
 }
