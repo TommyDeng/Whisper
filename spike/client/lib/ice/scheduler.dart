@@ -85,6 +85,7 @@ class CandidateScheduler {
     if (onlyTier != null) {
       _sealed = true;
       _phase = ReleasePhase.sealed;
+      _holdingForNics = false;
       return;
     }
     _refreshGate(DateTime.now());
@@ -162,6 +163,26 @@ class CandidateScheduler {
       PathTier.srflx => '公网 srflx',
       _ => onlyTier?.name ?? '',
     };
+  }
+
+  /// Recompute the NIC-wait flag from the list we have now, without sending.
+  void refreshStatus([DateTime? now]) {
+    final clock = now ?? DateTime.now();
+    if (_sealed) {
+      _holdingForNics = false;
+      return;
+    }
+    if (onlyTier != null) {
+      final needsMap = onlyTier == PathTier.lan || onlyTier == PathTier.zerotier;
+      if (needsMap && !canPreferInterfaces(_nics)) {
+        final started = _firstAt ?? clock;
+        _holdingForNics = !_nicMapReady && clock.difference(started) < nicMapWait;
+      } else {
+        _holdingForNics = false;
+      }
+      return;
+    }
+    _refreshGate(clock);
   }
 
   String describe() {

@@ -89,15 +89,19 @@ class CallController extends ChangeNotifier {
   String? _preferredRole;
   PathTier? _onlyTier;
   int _holdSeconds = 0;
+  int _waitSeconds = defaultWaitForPeer.inSeconds;
   String _fileTransport = 'datachannel';
   String _usedTransport = 'datachannel';
   int _bufferHigh = 1024 * 1024;
   int _bufferLow = 256 * 1024;
   Duration _pollInterval = const Duration(milliseconds: 5);
   int _directChunk = 256 * 1024;
-  ProgressTimeout? _stall;
-  ServerSocket? _directServer;
+  AutorunWatch? _watch;
+  final DirectListener _directListener = DirectListener();
   DirectLink? _directLink;
+  bool _directAnnouncing = false;
+  bool _directAnnounced = false;
+  bool _directConnecting = false;
   String? _directError;
   bool textAckSeen = false;
   bool textAckSent = false;
@@ -153,6 +157,7 @@ class CallController extends ChangeNotifier {
     try {
       _onlyTier = parseOnlyTier(Platform.environment['SPIKE_ONLY_TIER']);
       _holdSeconds = parseHoldSeconds(Platform.environment['SPIKE_HOLD_SECONDS']);
+      _waitSeconds = parseWaitSeconds(Platform.environment['SPIKE_WAIT_SECONDS']);
       _fileTransport = parseFileTransport(Platform.environment['SPIKE_FILE_TRANSPORT']);
       final high = int.tryParse(Platform.environment['SPIKE_BUFFER_HIGH_KB'] ?? '');
       final low = int.tryParse(Platform.environment['SPIKE_BUFFER_LOW_KB'] ?? '');
@@ -166,8 +171,14 @@ class CallController extends ChangeNotifier {
       await _finishAutorun(2, {'error': '$error'});
       return;
     }
-    _stall = ProgressTimeout(stall: autorunStall, onStall: _onAutorunStall);
-    _stall!.start();
+    _watch = AutorunWatch(
+      waitForPeer: Duration(seconds: _waitSeconds),
+      onWaitTimeout: () {
+        unawaited(_finishAutorun(2, {'error': 'wait-timeout'}));
+      },
+      onStall: _onAutorunStall,
+    );
+    _watch!.start();
     try {
       await connect();
     } catch (error) {
@@ -186,7 +197,6 @@ class CallController extends ChangeNotifier {
       _channel = channel;
       await channel.ready.timeout(const Duration(seconds: 8));
       signalingState = '已连接';
-      _noteAutorunProgress();
       _sub = channel.stream.listen(_onSocketData, onError: (Object error) {
         log('信令错误：$error');
       }, onDone: () {
@@ -287,6 +297,7 @@ class CallController extends ChangeNotifier {
       log('数据通道还没打开');
       return;
     }
+    _watch?.beginTransfer();
     final payloads = await _collectPayloads(chunks, size);
     final id = _newId();
     _sendingId = id;
@@ -404,7 +415,7 @@ class CallController extends ChangeNotifier {
       final frame = encodeChunkFrame(sequence, payloads[sequence]);
       await channel.send(RTCDataChannelMessage.fromBinary(frame));
       queued += frame.length;
-      _noteAutorunProgress();
+      _watch?.onFrame();
       if (queued >= _bufferHigh) {
         await _waitUntilBuffered(channel, _bufferLow);
         queued = await channel.getBufferedAmount();
@@ -431,7 +442,7 @@ class CallController extends ChangeNotifier {
     _ping?.cancel();
     _tick?.cancel();
     _stats?.cancel();
-    _stall?.cancel();
+    _watch?.cancel();
     _receive?.nakTimer?.cancel();
     unawaited(_sub?.cancel());
     unawaited(_channel?.sink.close());
@@ -578,11 +589,11 @@ class CallController extends ChangeNotifier {
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         _scheduler?.seal();
+        _scheduler?.refreshStatus();
         schedulerText = _scheduler?.describe() ?? schedulerText;
         unawaited(_refreshStats());
       }
       log('ICE $iceState');
-      _noteAutorunProgress();
     };
     pc.onConnectionState = (state) {
       pcState = _short(state);
@@ -687,7 +698,7 @@ class CallController extends ChangeNotifier {
   }
 
   void _noteAutorunProgress() {
-    _stall?.bump();
+    _watch?.onFrame();
   }
 
   void _onAutorunStall() {
@@ -706,26 +717,29 @@ class CallController extends ChangeNotifier {
   }
 
   Future<void> _maybeListenDirect() async {
-    if (_fileTransport != 'direct' || role != 'answerer' || _directServer != null) return;
+    if (_fileTransport != 'direct' || role != 'answerer' || _directAnnounced || _directAnnouncing) return;
+    if (localCandidateType == null || pathLabel == '等待') return;
     if (!_pathAllowsDirect()) {
-      _directError = '当前路径不是局域网或 ZeroTier host';
+      _directError = '选中的路径不是局域网或 ZeroTier host';
       return;
     }
     final local = localCandidateAddress;
     final localFp = localFingerprint;
     final remoteFp = remoteFingerprint;
     if (local == null || localFp == null || remoteFp == null) return;
+    _directAnnouncing = true;
     try {
-      final server = await ServerSocket.bind(InternetAddress(local), 0);
-      _directServer = server;
+      final server = await _directListener.bindOnce(InternetAddress(local));
       final bound = '$local:${server.port}';
       final key = directFileKey(localFp, remoteFp);
       server.listen((socket) {
         unawaited(_acceptDirect(socket, key, bound));
       });
+      _directAnnounced = true;
       await _sendDcText(encodeDirectListen(address: local, port: server.port));
       log('直连监听 $bound');
     } catch (error) {
+      if (!_directAnnounced) _directAnnouncing = false;
       _directError = '$error';
       log('直连监听失败：$error');
     }
@@ -736,6 +750,7 @@ class CallController extends ChangeNotifier {
       final link = await DirectLink.accept(socket: socket, key: key, boundAddress: bound);
       _directLink = link;
       _usedTransport = 'direct';
+      _watch?.beginTransfer();
       final received = await link.receiveFile(onProgress: _noteAutorunProgress);
       _usedTransport = 'direct';
       lastBytes = received.bytes.length;
@@ -771,15 +786,15 @@ class CallController extends ChangeNotifier {
     } catch (error) {
       _directError = '$error';
       log('直连接收失败：$error');
-      await socket.close();
     }
   }
 
   Future<void> _connectDirect(String address, int port) async {
-    if (_fileTransport != 'direct' || role != 'offerer') return;
+    if (_fileTransport != 'direct' || role != 'offerer' || _directLink != null || _directConnecting) return;
     final localFp = localFingerprint;
     final remoteFp = remoteFingerprint;
     if (localFp == null || remoteFp == null) return;
+    _directConnecting = true;
     try {
       final link = await DirectLink.connect(
         host: address,
@@ -816,7 +831,6 @@ class CallController extends ChangeNotifier {
   }
 
   Future<void> _onTextMessage(String raw) async {
-    _noteAutorunProgress();
     final message = parseSpikeMessage(raw);
     switch (message) {
       case TextSpike(:final body):
@@ -911,6 +925,7 @@ class CallController extends ChangeNotifier {
       return;
     }
     _rejectId = null;
+    _watch?.beginTransfer();
     final receive = _Receive(
       id: id,
       name: name,
@@ -1068,6 +1083,7 @@ class CallController extends ChangeNotifier {
   void _flushCandidates() {
     final scheduler = _scheduler;
     if (scheduler == null) return;
+    scheduler.refreshStatus();
     final ready = scheduler.drain(DateTime.now());
     schedulerText = scheduler.describe();
     for (final item in ready) {
@@ -1147,12 +1163,6 @@ class CallController extends ChangeNotifier {
     _earlyFrames.clear();
     _sentPayloads = null;
     _sendingId = null;
-    final server = _directServer;
-    _directServer = null;
-    final link = _directLink;
-    _directLink = null;
-    unawaited(server?.close());
-    unawaited(link?.close());
     _scheduler = null;
     _remoteSet = false;
     _pendingRemote.clear();
@@ -1181,8 +1191,10 @@ class CallController extends ChangeNotifier {
   Future<void> _finishAutorun(int code, Map<String, Object?> extra) async {
     if (!_autorun || _autorunFinished) return;
     _autorunFinished = true;
-    _stall?.cancel();
+    _watch?.cancel();
     await _refreshStats();
+    _scheduler?.refreshStatus();
+    if (_scheduler != null) schedulerText = _scheduler!.describe();
     final payload = {
       'role': role,
       'path': pathLabel,

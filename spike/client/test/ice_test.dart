@@ -271,6 +271,25 @@ void main() {
     expect(zerotierOnly.drain(start.add(const Duration(minutes: 2))), isEmpty);
     expect(zerotierOnly.describe(), contains('ZeroTier'));
     expect(zerotierOnly.describe(), contains('不回退'));
+    zerotierOnly.seal();
+    expect(zerotierOnly.describe(), contains('已连通'));
+    expect(zerotierOnly.describe(), isNot(contains('正在识别网卡')));
+    zerotierOnly.refreshStatus(start.add(const Duration(minutes: 2)));
+    expect(zerotierOnly.describe(), contains('已连通'));
+    expect(zerotierOnly.describe(), isNot(contains('正在识别网卡')));
+
+    final waiting = CandidateScheduler(
+      nics: const [],
+      nicMapReady: false,
+      onlyTier: PathTier.zerotier,
+      nicMapWait: const Duration(seconds: 15),
+    );
+    waiting.add(parseCandidateLine('candidate:1 1 UDP 2122260223 10.30.249.106 9 typ host', const [])!, now: start);
+    expect(waiting.drain(start), isEmpty);
+    expect(waiting.describe(), contains('正在识别网卡'));
+    waiting.seal();
+    expect(waiting.describe(), contains('已连通'));
+    expect(waiting.describe(), isNot(contains('正在识别网卡')));
 
     final srflxOnly = CandidateScheduler(nics: windows, nicMapReady: true, onlyTier: PathTier.srflx);
     srflxOnly.add(host('192.168.31.180'), now: start);

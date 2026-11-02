@@ -74,6 +74,9 @@ void main() {
     expect(parseHoldSeconds('30'), 30);
     expect(() => parseHoldSeconds('-1'), throwsFormatException);
     expect(() => parseHoldSeconds('soon'), throwsFormatException);
+    expect(parseWaitSeconds(null), 600);
+    expect(parseWaitSeconds('60'), 60);
+    expect(() => parseWaitSeconds('0'), throwsFormatException);
     expect(parseFileTransport(null), 'datachannel');
     expect(parseFileTransport('direct'), 'direct');
     expect(() => parseFileTransport('quic'), throwsFormatException);

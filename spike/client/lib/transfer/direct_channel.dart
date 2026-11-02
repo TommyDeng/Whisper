@@ -27,6 +27,33 @@ bool _macEquals(Uint8List a, Uint8List b) {
   return diff == 0;
 }
 
+/// Binds a single TCP port. Concurrent callers share that socket and port.
+class DirectListener {
+  ServerSocket? _socket;
+  Future<ServerSocket>? _binding;
+
+  int? get port => _socket?.port;
+
+  Future<ServerSocket> bindOnce(InternetAddress address) {
+    final existing = _socket;
+    if (existing != null) return Future<ServerSocket>.value(existing);
+    return _binding ??= _bind(address);
+  }
+
+  Future<ServerSocket> _bind(InternetAddress address) async {
+    final socket = await ServerSocket.bind(address, 0);
+    _socket = socket;
+    return socket;
+  }
+
+  Future<void> close() async {
+    final socket = _socket;
+    _socket = null;
+    _binding = null;
+    await socket?.close();
+  }
+}
+
 /// TCP file side channel. The handshake proves both ends know the DTLS
 /// fingerprint key. The file itself is chunked AES-GCM.
 class DirectLink {

@@ -53,4 +53,29 @@ void main() {
     expect(await serverFailed.future, isA<StateError>());
     await badServer.close();
   });
+
+  test('one listener announces a single port and survives a delayed join', () async {
+    final key = directFileKey('sha-256 AA:11', 'sha-256 BB:22');
+    final listener = DirectListener();
+    final first = listener.bindOnce(InternetAddress.loopbackIPv4);
+    final second = listener.bindOnce(InternetAddress.loopbackIPv4);
+    final sockets = await Future.wait([first, second]);
+    expect(sockets[0].port, sockets[1].port);
+    expect(listener.port, sockets[0].port);
+    final bound = '127.0.0.1:${sockets[0].port}';
+    final accepted = sockets[0].first.then((socket) => DirectLink.accept(socket: socket, key: key, boundAddress: bound));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    final client = await DirectLink.connect(host: '127.0.0.1', port: sockets[0].port, key: key);
+    final link = await accepted;
+    final plain = Uint8List.fromList(List<int>.generate(80 * 1024, (index) => index % 251));
+    final digest = ChunkAssembler.hashPayloads([plain]);
+    final received = link.receiveFile();
+    await client.sendFile(id: 'late', name: 'late.bin', payloads: [plain], sha256Hex: digest, chunkSize: 32 * 1024);
+    final result = await received;
+    expect(result.ok, isTrue);
+    expect(result.bytes, plain);
+    await client.close();
+    await link.close();
+    await listener.close();
+  });
 }

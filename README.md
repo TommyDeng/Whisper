@@ -100,7 +100,7 @@ SPIKE_AUTORUN=1 SPIKE_ROLE=answerer SPIKE_URL=ws://127.0.0.1:8787 SPIKE_ROOM=aut
 
 截图时两边加上 `SPIKE_HOLD_SECONDS=30`（或你需要的秒数）。结果先写入 JSON，窗口再停留这段时间才退出。只有一侧停留的话，另一侧退出会把通话拆掉。
 
-Autorun 的超时按进度计算：连续 30 秒没有新的文件块才写成 `error=stall`。传输还在走时不会因为整段通话超过两分钟就先写一份没有校验结果的 JSON。
+等对端和 ICE 时不跑 30 秒停滞钟。这段等待默认 600 秒，用 `SPIKE_WAIT_SECONDS` 改。文件传输开始之后，连续 30 秒没有新块才写成 `error=stall`。结果 JSON 只写一次，并且用当时的路径、DTLS 和调度器状态。直连只在 ICE 选中候选对之后判断；监听只绑定一次，端口以绑定成功后发出去的那次为准，传输没结束前不关这条 TCP。
 
 同一对机器上，32 MiB 走物理局域网数据通道大约 9.8 MiB/s，只走 ZeroTier（MTU 2800）大约 0.81 MiB/s，0 次重传。桌面端 `onBufferedAmountLow` 不会回调，发送端只能轮询 `getBufferedAmount`。SCTP 再叠在 2800 字节的 ZeroTier 上，小分块会把吞吐打得很低。数据通道还可以用 `SPIKE_CHUNK`、`SPIKE_BUFFER_HIGH_KB`、`SPIKE_BUFFER_LOW_KB`、`SPIKE_POLL_MS` 调整，但大文件应改走直连。
 

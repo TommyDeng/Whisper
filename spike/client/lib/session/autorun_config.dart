@@ -29,8 +29,23 @@ PathTier? parseOnlyTier(String? raw) {
   };
 }
 
+/// How long autorun waits for the peer and ICE before giving up.
+const defaultWaitForPeer = Duration(seconds: 600);
+
 /// How long autorun waits with no file progress before treating the run as stalled.
+/// This starts only after a file transfer has begun.
 const autorunStall = Duration(seconds: 30);
+
+/// Seconds to wait for the other peer. Unset or empty uses [defaultWaitForPeer].
+int parseWaitSeconds(String? raw) {
+  final text = raw?.trim();
+  if (text == null || text.isEmpty) return defaultWaitForPeer.inSeconds;
+  final value = int.tryParse(text);
+  if (value == null || value <= 0) {
+    throw FormatException('SPIKE_WAIT_SECONDS 需要是正整数');
+  }
+  return value;
+}
 
 /// `datachannel` (default) or `direct` (TCP on the ICE host address).
 String parseFileTransport(String? raw) {
