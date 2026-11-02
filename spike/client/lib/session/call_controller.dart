@@ -86,6 +86,8 @@ class CallController extends ChangeNotifier {
   int _autorunBytes = 8 * 1024 * 1024;
   String? _autorunResult;
   String? _preferredRole;
+  PathTier? _onlyTier;
+  int _holdSeconds = 0;
   bool textAckSeen = false;
   bool textAckSent = false;
   bool _helloSeen = false;
@@ -137,6 +139,13 @@ class CallController extends ChangeNotifier {
     if (chunk != null && chunk >= 1024) chunkSize = chunk;
     final seconds = int.tryParse(Platform.environment['SPIKE_FALLBACK_SECONDS'] ?? '');
     if (seconds != null && seconds >= 0) fallback = Duration(seconds: seconds);
+    try {
+      _onlyTier = parseOnlyTier(Platform.environment['SPIKE_ONLY_TIER']);
+      _holdSeconds = parseHoldSeconds(Platform.environment['SPIKE_HOLD_SECONDS']);
+    } catch (error) {
+      await _finishAutorun(2, {'error': '$error'});
+      return;
+    }
     _autorunTimer = Timer(const Duration(seconds: 120), () {
       unawaited(_finishAutorun(2, {'error': 'timeout'}));
     });
@@ -484,7 +493,12 @@ class CallController extends ChangeNotifier {
     await _closePeer();
     final pc = await createPeerConnection(buildPeerConnectionConfig());
     _pc = pc;
-    _scheduler = CandidateScheduler(nics: nics, fallback: fallback, nicMapReady: _nicsReady);
+    _scheduler = CandidateScheduler(
+      nics: nics,
+      fallback: fallback,
+      nicMapReady: _nicsReady,
+      onlyTier: _onlyTier,
+    );
     schedulerText = _scheduler!.describe();
     _remoteSet = false;
     _pendingRemote.clear();
@@ -1018,7 +1032,12 @@ class CallController extends ChangeNotifier {
     payload['preferredRole'] = _preferredRole;
     payload['textAck'] = textAckSeen;
     payload['textAckSent'] = textAckSent;
+    payload['onlyTier'] = _onlyTier?.name;
     await File(path).writeAsString(const JsonEncoder.withIndent('  ').convert(payload));
+    if (_holdSeconds > 0) {
+      log('结果已写入，窗口再保持 $_holdSeconds 秒');
+      await Future<void>.delayed(Duration(seconds: _holdSeconds));
+    }
     exit(code);
   }
 

@@ -245,4 +245,38 @@ void main() {
     expect(rest.map((item) => item.parsed.address), containsAll(['10.30.249.106', '203.0.113.8']));
     expect(scheduler.tierOf(rest.firstWhere((item) => item.parsed.address == '10.30.249.106')), PathTier.zerotier);
   });
+
+  test('SPIKE_ONLY_TIER publishes one tier and never falls back', () {
+    final windows = [
+      const NicInfo(name: 'ZeroTier One [166359304e7a07aa]', kind: NicKind.zerotier, addresses: ['10.30.249.106']),
+      const NicInfo(name: '以太网 3', kind: NicKind.lan, addresses: ['192.168.31.180']),
+    ];
+    ParsedCandidate host(String address) {
+      return parseCandidateLine('candidate:1 1 UDP 2122260223 $address 9 typ host', windows)!;
+    }
+
+    final start = DateTime.utc(2026);
+    final zerotierOnly = CandidateScheduler(
+      nics: windows,
+      nicMapReady: true,
+      fallback: const Duration(seconds: 5),
+      onlyTier: PathTier.zerotier,
+    );
+    zerotierOnly.add(host('192.168.31.180'), now: start);
+    zerotierOnly.add(host('10.30.249.106'), now: start);
+    zerotierOnly.add(parseCandidateLine('candidate:3 1 UDP 1686052607 203.0.113.8 9 typ srflx', windows)!, now: start);
+    zerotierOnly.add(parseCandidateLine('candidate:4 1 UDP 2122260223 abcd.local 9 typ host', windows)!, now: start);
+    zerotierOnly.markGatheringComplete();
+    expect(zerotierOnly.drain(start).map((item) => item.parsed.address), ['10.30.249.106']);
+    expect(zerotierOnly.drain(start.add(const Duration(minutes: 2))), isEmpty);
+    expect(zerotierOnly.describe(), contains('ZeroTier'));
+    expect(zerotierOnly.describe(), contains('不回退'));
+
+    final srflxOnly = CandidateScheduler(nics: windows, nicMapReady: true, onlyTier: PathTier.srflx);
+    srflxOnly.add(host('192.168.31.180'), now: start);
+    srflxOnly.add(parseCandidateLine('candidate:3 1 UDP 1686052607 203.0.113.8 9 typ srflx', windows)!, now: start);
+    srflxOnly.markGatheringComplete();
+    expect(srflxOnly.drain(start).map((item) => item.parsed.address), ['203.0.113.8']);
+    expect(srflxOnly.drain(start.add(const Duration(minutes: 2))), isEmpty);
+  });
 }

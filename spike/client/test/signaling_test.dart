@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:whisper_webrtc_spike/ice/candidate.dart';
 import 'package:whisper_webrtc_spike/session/autorun_config.dart';
 import 'package:whisper_webrtc_spike/session/rtc_config.dart';
 import 'package:whisper_webrtc_spike/signaling/address.dart';
@@ -63,5 +64,15 @@ void main() {
     expect(autorunResultPath(spikeResult: r'C:\temp\a.json', role: 'answerer'), r'C:\temp\a.json');
     expect(autorunResultPath(role: 'offerer'), 'spike-result-offerer.json');
     expect(autorunResultPath(role: 'answerer'), 'spike-result-answerer.json');
+    expect(parseOnlyTier(null), isNull);
+    expect(parseOnlyTier(''), isNull);
+    expect(parseOnlyTier('ZeroTier'), PathTier.zerotier);
+    expect(parseOnlyTier('lan'), PathTier.lan);
+    expect(parseOnlyTier('srflx'), PathTier.srflx);
+    expect(() => parseOnlyTier('relay'), throwsFormatException);
+    expect(parseHoldSeconds(null), 0);
+    expect(parseHoldSeconds('30'), 30);
+    expect(() => parseHoldSeconds('-1'), throwsFormatException);
+    expect(() => parseHoldSeconds('soon'), throwsFormatException);
   });
 }

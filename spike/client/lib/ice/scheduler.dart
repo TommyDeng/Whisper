@@ -25,11 +25,13 @@ class CandidateScheduler {
     this.maxGatherWait = const Duration(seconds: 4),
     this.nicMapWait = const Duration(seconds: 15),
     this._nicMapReady = false,
+    this.onlyTier,
   });
 
   final Duration fallback;
   final Duration maxGatherWait;
   final Duration nicMapWait;
+  final PathTier? onlyTier;
   final List<NicInfo> _nics;
 
   final List<OutgoingCandidate> _items = [];
@@ -80,6 +82,11 @@ class CandidateScheduler {
   }
 
   void seal() {
+    if (onlyTier != null) {
+      _sealed = true;
+      _phase = ReleasePhase.sealed;
+      return;
+    }
     _refreshGate(DateTime.now());
     if (_holdingForNics) return;
     if (_bypassReason == BypassReason.none && _phase != ReleasePhase.all) {
@@ -90,6 +97,7 @@ class CandidateScheduler {
 
   List<OutgoingCandidate> drain(DateTime now) {
     if (_sealed) return const [];
+    if (onlyTier != null) return _drainOnlyTier(now);
     _refreshGate(now);
     if (_holdingForNics) return const [];
     if (_bypassReason != BypassReason.none) {
@@ -128,7 +136,41 @@ class CandidateScheduler {
     _bypassReason = BypassReason.noNicMap;
   }
 
+  List<OutgoingCandidate> _drainOnlyTier(DateTime now) {
+    final tier = onlyTier!;
+    final needsMap = tier == PathTier.lan || tier == PathTier.zerotier;
+    if (needsMap && !canPreferInterfaces(_nics)) {
+      final started = _firstAt ?? now;
+      if (!_nicMapReady && now.difference(started) < nicMapWait) {
+        _holdingForNics = true;
+        _bypassReason = BypassReason.none;
+        _phase = ReleasePhase.holding;
+        return const [];
+      }
+    }
+    _holdingForNics = false;
+    _bypassReason = BypassReason.none;
+    _preferred = tier;
+    _phase = ReleasePhase.preferred;
+    return _take((item) => tierOf(item) == tier);
+  }
+
+  String _onlyTierLabel() {
+    return switch (onlyTier) {
+      PathTier.lan => '局域网',
+      PathTier.zerotier => 'ZeroTier',
+      PathTier.srflx => '公网 srflx',
+      _ => onlyTier?.name ?? '',
+    };
+  }
+
   String describe() {
+    if (onlyTier != null) {
+      final state = _holdingForNics
+          ? '正在识别网卡，之后只发布${_onlyTierLabel()}'
+          : '测试覆盖：只发布${_onlyTierLabel()}，不回退${_sealed ? '，已连通' : ''}';
+      return state;
+    }
     if (_holdingForNics) return '正在识别网卡，先不发布候选';
     switch (_bypassReason) {
       case BypassReason.mdns:

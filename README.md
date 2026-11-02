@@ -75,7 +75,7 @@ flutter run -d linux
 
 ### 自动吞吐跑法
 
-编译一次后，可以用环境变量让两个进程自己连上并传 8 MiB。offerer 把结果写进 JSON 后退出；answerer 会一直留着，测完再停掉。
+编译一次后，可以用环境变量让两个进程自己连上并传 8 MiB。两边写完结果 JSON 后退出。
 
 ```bash
 cd spike/signaling && npm run dev
@@ -89,6 +89,16 @@ SPIKE_AUTORUN=1 SPIKE_ROLE=answerer SPIKE_URL=ws://127.0.0.1:8787 SPIKE_ROOM=aut
 ```
 
 `SPIKE_ROLE` 不填时，设置了 `SPIKE_BYTES` 的一侧会请求当 offerer，后加入房间也可以当主叫。两边都会写结果 JSON：有 `SPIKE_RESULT` 就写到那个路径，否则写当前目录的 `spike-result-offerer.json` / `spike-result-answerer.json`。offerer 的 `textAck` 表示收到了文字回执；answerer 的 `helloSeen` / `textAckSent` 表示收到了测试文字并且发出了回执。
+
+两台机器同时在物理局域网和 ZeroTier 上时，自动策略会选局域网。要单独看某一条路径，两边都设置 `SPIKE_ONLY_TIER`：
+
+- `lan`：只发布局域网 host
+- `zerotier`：只发布 ZeroTier host
+- `srflx`：只发布公网 srflx
+
+不设则保持原来的自动顺序（局域网，然后 ZeroTier，超时再放开其余）。这个开关不会回退到别的层级。结果 JSON 里的 `onlyTier` 是实际使用的值，未设置时为 `null`。
+
+截图时两边加上 `SPIKE_HOLD_SECONDS=30`（或你需要的秒数）。结果先写入 JSON，窗口再停留这段时间才退出。只有一侧停留的话，另一侧退出会把通话拆掉。
 
 ### 这次 spike 已经能确定的事
 
