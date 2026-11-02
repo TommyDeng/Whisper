@@ -29,6 +29,17 @@ PathTier? parseOnlyTier(String? raw) {
   };
 }
 
+/// How long autorun waits with no file progress before treating the run as stalled.
+const autorunStall = Duration(seconds: 30);
+
+/// `datachannel` (default) or `direct` (TCP on the ICE host address).
+String parseFileTransport(String? raw) {
+  final text = raw?.trim().toLowerCase();
+  if (text == null || text.isEmpty || text == 'datachannel') return 'datachannel';
+  if (text == 'direct') return 'direct';
+  throw FormatException('SPIKE_FILE_TRANSPORT 只能是 datachannel 或 direct');
+}
+
 /// Seconds to leave the window open after autorun finishes. Unset or empty is 0.
 int parseHoldSeconds(String? raw) {
   final text = raw?.trim();

@@ -100,6 +100,12 @@ SPIKE_AUTORUN=1 SPIKE_ROLE=answerer SPIKE_URL=ws://127.0.0.1:8787 SPIKE_ROOM=aut
 
 截图时两边加上 `SPIKE_HOLD_SECONDS=30`（或你需要的秒数）。结果先写入 JSON，窗口再停留这段时间才退出。只有一侧停留的话，另一侧退出会把通话拆掉。
 
+Autorun 的超时按进度计算：连续 30 秒没有新的文件块才写成 `error=stall`。传输还在走时不会因为整段通话超过两分钟就先写一份没有校验结果的 JSON。
+
+同一对机器上，32 MiB 走物理局域网数据通道大约 9.8 MiB/s，只走 ZeroTier（MTU 2800）大约 0.81 MiB/s，0 次重传。桌面端 `onBufferedAmountLow` 不会回调，发送端只能轮询 `getBufferedAmount`。SCTP 再叠在 2800 字节的 ZeroTier 上，小分块会把吞吐打得很低。数据通道还可以用 `SPIKE_CHUNK`、`SPIKE_BUFFER_HIGH_KB`、`SPIKE_BUFFER_LOW_KB`、`SPIKE_POLL_MS` 调整，但大文件应改走直连。
+
+`SPIKE_FILE_TRANSPORT=direct` 时，若选中的 ICE 路径是局域网或 ZeroTier 的 host 地址，answerer 在那个地址上听一个 TCP 端口，经数据通道把端口告诉 offerer。握手用双方 DTLS 指纹排序后派生的密钥做 HMAC，文件按块做 AES-GCM，收完再对明文做 SHA-256。结果 JSON 的 `fileTransport` 是 `direct` 或 `datachannel`，`mibPerSec` 是这一次实际走的通道。直连默认 256 KiB 一块，可用 `SPIKE_DIRECT_CHUNK_KB` 改。路径不是局域网 / ZeroTier，或直连没接上时，自动改回数据通道，并在 `directError` 里写原因。不设 `SPIKE_FILE_TRANSPORT` 时仍走数据通道。
+
 ### 这次 spike 已经能确定的事
 
 下面的通话和吞吐是 2026-11-02 在一台 Linux 虚拟机上、用两个本机进程打出来的（`flutter_webrtc` 1.6.3，8 MiB，SHA-256 通过）。不是两台物理机，也没有 ZeroTier 网卡。

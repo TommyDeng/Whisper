@@ -45,6 +45,13 @@ class FileNakSpike extends SpikeMessage {
   final List<int> missing;
 }
 
+class DirectListenSpike extends SpikeMessage {
+  const DirectListenSpike(this.address, this.port);
+
+  final String address;
+  final int port;
+}
+
 class FileEndSpike extends SpikeMessage {
   const FileEndSpike({required this.id, required this.sha256, required this.submitMillis});
 
@@ -100,6 +107,10 @@ String encodeFileStartAck(String id) => jsonEncode({'t': 'file-start-ack', 'id':
 
 String encodeFileNak({required String id, required List<int> missing}) {
   return jsonEncode({'t': 'file-nak', 'id': id, 'missing': missing});
+}
+
+String encodeDirectListen({required String address, required int port}) {
+  return jsonEncode({'t': 'direct-listen', 'address': address, 'port': port});
 }
 
 String encodeFileEnd({required String id, required String sha256, required int submitMillis}) {
@@ -171,6 +182,13 @@ SpikeMessage parseSpikeMessage(String raw) {
         sequences.add(item);
       }
       return FileNakSpike(id, sequences);
+    case 'direct-listen':
+      final address = decoded['address'];
+      final port = decoded['port'];
+      if (address is! String || address.isEmpty || port is! int || port <= 0 || port > 65535) {
+        return UnknownSpike(raw);
+      }
+      return DirectListenSpike(address, port);
     case 'file-end':
       final id = decoded['id'];
       final sha = decoded['sha256'];

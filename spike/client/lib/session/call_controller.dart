@@ -16,9 +16,11 @@ import '../ice/scheduler.dart';
 import '../signaling/address.dart';
 import '../signaling/events.dart';
 import '../transfer/bytes.dart';
+import '../transfer/direct_channel.dart';
 import '../transfer/frames.dart';
 import '../transfer/messages.dart';
 import 'autorun_config.dart';
+import 'progress_timeout.dart';
 import 'rtc_config.dart';
 
 const maxSpikeFileBytes = 256 * 1024 * 1024;
@@ -71,7 +73,6 @@ class CallController extends ChangeNotifier {
   Timer? _ping;
   Timer? _tick;
   Timer? _stats;
-  Timer? _autorunTimer;
   RTCPeerConnection? _pc;
   RTCDataChannel? _dc;
   MediaStream? _localStream;
@@ -88,6 +89,16 @@ class CallController extends ChangeNotifier {
   String? _preferredRole;
   PathTier? _onlyTier;
   int _holdSeconds = 0;
+  String _fileTransport = 'datachannel';
+  String _usedTransport = 'datachannel';
+  int _bufferHigh = 1024 * 1024;
+  int _bufferLow = 256 * 1024;
+  Duration _pollInterval = const Duration(milliseconds: 5);
+  int _directChunk = 256 * 1024;
+  ProgressTimeout? _stall;
+  ServerSocket? _directServer;
+  DirectLink? _directLink;
+  String? _directError;
   bool textAckSeen = false;
   bool textAckSent = false;
   bool _helloSeen = false;
@@ -142,13 +153,21 @@ class CallController extends ChangeNotifier {
     try {
       _onlyTier = parseOnlyTier(Platform.environment['SPIKE_ONLY_TIER']);
       _holdSeconds = parseHoldSeconds(Platform.environment['SPIKE_HOLD_SECONDS']);
+      _fileTransport = parseFileTransport(Platform.environment['SPIKE_FILE_TRANSPORT']);
+      final high = int.tryParse(Platform.environment['SPIKE_BUFFER_HIGH_KB'] ?? '');
+      final low = int.tryParse(Platform.environment['SPIKE_BUFFER_LOW_KB'] ?? '');
+      final poll = int.tryParse(Platform.environment['SPIKE_POLL_MS'] ?? '');
+      final directChunk = int.tryParse(Platform.environment['SPIKE_DIRECT_CHUNK_KB'] ?? '');
+      if (high != null && high > 0) _bufferHigh = high * 1024;
+      if (low != null && low >= 0) _bufferLow = low * 1024;
+      if (poll != null && poll >= 0) _pollInterval = Duration(milliseconds: poll);
+      if (directChunk != null && directChunk >= 16) _directChunk = directChunk * 1024;
     } catch (error) {
       await _finishAutorun(2, {'error': '$error'});
       return;
     }
-    _autorunTimer = Timer(const Duration(seconds: 120), () {
-      unawaited(_finishAutorun(2, {'error': 'timeout'}));
-    });
+    _stall = ProgressTimeout(stall: autorunStall, onStall: _onAutorunStall);
+    _stall!.start();
     try {
       await connect();
     } catch (error) {
@@ -167,6 +186,7 @@ class CallController extends ChangeNotifier {
       _channel = channel;
       await channel.ready.timeout(const Duration(seconds: 8));
       signalingState = '已连接';
+      _noteAutorunProgress();
       _sub = channel.stream.listen(_onSocketData, onError: (Object error) {
         log('信令错误：$error');
       }, onDone: () {
@@ -278,6 +298,30 @@ class CallController extends ChangeNotifier {
     final resultWait = Completer<FileResultSpike>();
     _fileResult = resultWait;
     try {
+      final digest = ChunkAssembler.hashPayloads(payloads);
+      if (_fileTransport == 'direct' && _directLink != null) {
+        _usedTransport = 'direct';
+        final clock = Stopwatch()..start();
+        await _directLink!.sendFile(
+          id: id,
+          name: name,
+          payloads: payloads,
+          sha256Hex: digest,
+          chunkSize: _directChunk,
+          onProgress: _noteAutorunProgress,
+        );
+        clock.stop();
+        lastSubmitMillis = clock.elapsedMilliseconds;
+        log('直连已提交 $name，$size 字节，提交耗时 $lastSubmitMillis ms');
+        final result = await resultWait.future.timeout(const Duration(minutes: 3));
+        if (!result.ok) log('对端校验失败');
+        return;
+      }
+      if (_fileTransport == 'direct') {
+        _directError ??= '直连未就绪';
+        log('直连未就绪，改走数据通道');
+      }
+      _usedTransport = 'datachannel';
       final start = encodeFileStart(
         id: id,
         name: name,
@@ -300,7 +344,6 @@ class CallController extends ChangeNotifier {
       await _sendFrames(payloads, List<int>.generate(payloads.length, (index) => index));
       clock.stop();
       lastSubmitMillis = clock.elapsedMilliseconds;
-      final digest = ChunkAssembler.hashPayloads(payloads);
       await _sendDcText(encodeFileEnd(id: id, sha256: digest, submitMillis: lastSubmitMillis!));
       log('文件已提交 $name，$size 字节，${payloads.length} 块，提交耗时 $lastSubmitMillis ms');
       final result = await resultWait.future.timeout(const Duration(seconds: 60));
@@ -355,18 +398,19 @@ class CallController extends ChangeNotifier {
   Future<void> _sendFrames(List<Uint8List> payloads, List<int> sequences) async {
     final channel = _dc;
     if (channel == null) throw StateError('数据通道已关闭');
-    var queued = 0;
+      var queued = 0;
     for (final sequence in sequences) {
       if (sequence < 0 || sequence >= payloads.length) continue;
       final frame = encodeChunkFrame(sequence, payloads[sequence]);
       await channel.send(RTCDataChannelMessage.fromBinary(frame));
       queued += frame.length;
-      if (queued >= 1024 * 1024) {
-        await _waitUntilBuffered(channel, 256 * 1024);
+      _noteAutorunProgress();
+      if (queued >= _bufferHigh) {
+        await _waitUntilBuffered(channel, _bufferLow);
         queued = await channel.getBufferedAmount();
       }
     }
-    await _waitUntilBuffered(channel, 256 * 1024);
+    await _waitUntilBuffered(channel, _bufferLow);
   }
 
   Future<void> _waitUntilBuffered(RTCDataChannel channel, int lowWater) async {
@@ -387,7 +431,7 @@ class CallController extends ChangeNotifier {
     _ping?.cancel();
     _tick?.cancel();
     _stats?.cancel();
-    _autorunTimer?.cancel();
+    _stall?.cancel();
     _receive?.nakTimer?.cancel();
     unawaited(_sub?.cancel());
     unawaited(_channel?.sink.close());
@@ -538,6 +582,7 @@ class CallController extends ChangeNotifier {
         unawaited(_refreshStats());
       }
       log('ICE $iceState');
+      _noteAutorunProgress();
     };
     pc.onConnectionState = (state) {
       pcState = _short(state);
@@ -594,10 +639,10 @@ class CallController extends ChangeNotifier {
 
   void _bindChannel(RTCDataChannel channel) {
     _dc = channel;
-    channel.bufferedAmountLowThreshold = 256 * 1024;
+    channel.bufferedAmountLowThreshold = _bufferLow;
     channel.onBufferedAmountLow = (amount) {
       final waiter = _drainWaiter;
-      if (waiter != null && !waiter.isCompleted && amount <= 256 * 1024) {
+      if (waiter != null && !waiter.isCompleted && amount <= _bufferLow) {
         waiter.complete();
       }
     };
@@ -627,7 +672,127 @@ class CallController extends ChangeNotifier {
       _autorunSent = true;
       final acked = await _helloAndWaitForAck();
       if (!acked) log('文字回执超时，仍继续传文件');
+      if (_fileTransport == 'direct') {
+        final deadline = DateTime.now().add(const Duration(seconds: 8));
+        while (_directLink == null && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        }
+        if (_directLink == null) {
+          _directError ??= '直连未就绪';
+          log('直连未就绪，改走数据通道');
+        }
+      }
       await sendTestPayload(_autorunBytes);
+    }
+  }
+
+  void _noteAutorunProgress() {
+    _stall?.bump();
+  }
+
+  void _onAutorunStall() {
+    final received = _receive?.assembler.receivedPayloadBytes;
+    unawaited(_finishAutorun(2, {
+      'error': 'stall',
+      'bytes': received,
+      'helloSeen': _helloSeen,
+      'fileTransport': _usedTransport,
+    }));
+  }
+
+  bool _pathAllowsDirect() {
+    if (localCandidateType != 'host') return false;
+    return pathLabel == '局域网' || pathLabel == 'ZeroTier';
+  }
+
+  Future<void> _maybeListenDirect() async {
+    if (_fileTransport != 'direct' || role != 'answerer' || _directServer != null) return;
+    if (!_pathAllowsDirect()) {
+      _directError = '当前路径不是局域网或 ZeroTier host';
+      return;
+    }
+    final local = localCandidateAddress;
+    final localFp = localFingerprint;
+    final remoteFp = remoteFingerprint;
+    if (local == null || localFp == null || remoteFp == null) return;
+    try {
+      final server = await ServerSocket.bind(InternetAddress(local), 0);
+      _directServer = server;
+      final bound = '$local:${server.port}';
+      final key = directFileKey(localFp, remoteFp);
+      server.listen((socket) {
+        unawaited(_acceptDirect(socket, key, bound));
+      });
+      await _sendDcText(encodeDirectListen(address: local, port: server.port));
+      log('直连监听 $bound');
+    } catch (error) {
+      _directError = '$error';
+      log('直连监听失败：$error');
+    }
+  }
+
+  Future<void> _acceptDirect(Socket socket, Uint8List key, String bound) async {
+    try {
+      final link = await DirectLink.accept(socket: socket, key: key, boundAddress: bound);
+      _directLink = link;
+      _usedTransport = 'direct';
+      final received = await link.receiveFile(onProgress: _noteAutorunProgress);
+      _usedTransport = 'direct';
+      lastBytes = received.bytes.length;
+      lastHashOk = received.ok;
+      lastReceiveMillis = received.millis;
+      lastMibps = received.millis == 0 ? null : received.bytes.length / 1024 / 1024 / (received.millis / 1000);
+      final dir = await Directory.systemTemp.createTemp('whisper-spike-');
+      final path = '${dir.path}/${safeFileName(received.name)}';
+      await File(path).writeAsBytes(received.bytes, flush: true);
+      receivePath = path;
+      log('直连接收完成 ${received.ok ? '校验通过' : '校验失败'}，${received.bytes.length} 字节，${received.millis} ms，${lastMibps?.toStringAsFixed(2) ?? '—'} MiB/s');
+      await _sendDcText(
+        encodeFileResult(
+          id: received.id,
+          ok: received.ok,
+          bytes: received.bytes.length,
+          millis: received.millis,
+          sha256: received.sha256Hex,
+        ),
+      );
+      if (_autorun && role == 'answerer') {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await _finishAutorun(received.ok ? 0 : 2, {
+          'bytes': received.bytes.length,
+          'receiverMillis': received.millis,
+          'mibPerSec': lastMibps,
+          'sha256Ok': received.ok,
+          'sha256': received.sha256Hex,
+          'helloSeen': _helloSeen,
+          'fileTransport': 'direct',
+        });
+      }
+    } catch (error) {
+      _directError = '$error';
+      log('直连接收失败：$error');
+      await socket.close();
+    }
+  }
+
+  Future<void> _connectDirect(String address, int port) async {
+    if (_fileTransport != 'direct' || role != 'offerer') return;
+    final localFp = localFingerprint;
+    final remoteFp = remoteFingerprint;
+    if (localFp == null || remoteFp == null) return;
+    try {
+      final link = await DirectLink.connect(
+        host: address,
+        port: port,
+        key: directFileKey(localFp, remoteFp),
+        sourceAddress: localCandidateAddress == null ? null : InternetAddress.tryParse(localCandidateAddress!),
+      );
+      _directLink = link;
+      _usedTransport = 'direct';
+      log('直连已接通 $address:$port');
+    } catch (error) {
+      _directError = '$error';
+      log('直连连接失败：$error');
     }
   }
 
@@ -651,6 +816,7 @@ class CallController extends ChangeNotifier {
   }
 
   Future<void> _onTextMessage(String raw) async {
+    _noteAutorunProgress();
     final message = parseSpikeMessage(raw);
     switch (message) {
       case TextSpike(:final body):
@@ -673,6 +839,8 @@ class CallController extends ChangeNotifier {
         }
       case FileNakSpike(:final id, :final missing):
         if (id == _sendingId) unawaited(_retransmit(missing));
+      case DirectListenSpike(:final address, :final port):
+        unawaited(_connectDirect(address, port));
       case FileEndSpike(:final id, :final sha256, :final submitMillis):
         final receive = _receive;
         if (receive == null || receive.id != id) {
@@ -775,6 +943,7 @@ class CallController extends ChangeNotifier {
       return;
     }
     receive.assembler.addFrame(frame);
+    _noteAutorunProgress();
     _considerReceive();
   }
 
@@ -881,7 +1050,7 @@ class CallController extends ChangeNotifier {
   Future<void> _waitForDrain() {
     final waiter = Completer<void>();
     _drainWaiter = waiter;
-    return Future.any([waiter.future, Future<void>.delayed(const Duration(milliseconds: 5))]);
+    return Future.any([waiter.future, Future<void>.delayed(_pollInterval)]);
   }
 
   Future<void> _sendDcText(String text) async {
@@ -937,6 +1106,7 @@ class CallController extends ChangeNotifier {
       remoteCandidateType = snapshot.remoteType;
       remoteCandidateAddress = snapshot.remoteAddress;
       _notify();
+      if (_fileTransport == 'direct') unawaited(_maybeListenDirect());
     } catch (error) {
       log('getStats 失败：$error');
     }
@@ -977,6 +1147,12 @@ class CallController extends ChangeNotifier {
     _earlyFrames.clear();
     _sentPayloads = null;
     _sendingId = null;
+    final server = _directServer;
+    _directServer = null;
+    final link = _directLink;
+    _directLink = null;
+    unawaited(server?.close());
+    unawaited(link?.close());
     _scheduler = null;
     _remoteSet = false;
     _pendingRemote.clear();
@@ -1005,7 +1181,7 @@ class CallController extends ChangeNotifier {
   Future<void> _finishAutorun(int code, Map<String, Object?> extra) async {
     if (!_autorun || _autorunFinished) return;
     _autorunFinished = true;
-    _autorunTimer?.cancel();
+    _stall?.cancel();
     await _refreshStats();
     final payload = {
       'role': role,
@@ -1033,6 +1209,8 @@ class CallController extends ChangeNotifier {
     payload['textAck'] = textAckSeen;
     payload['textAckSent'] = textAckSent;
     payload['onlyTier'] = _onlyTier?.name;
+    payload['fileTransport'] = _usedTransport;
+    if (_directError != null) payload['directError'] = _directError;
     await File(path).writeAsString(const JsonEncoder.withIndent('  ').convert(payload));
     if (_holdSeconds > 0) {
       log('结果已写入，窗口再保持 $_holdSeconds 秒');
