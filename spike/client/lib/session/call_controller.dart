@@ -61,6 +61,7 @@ class CallController extends ChangeNotifier {
   String? receivePath;
 
   final List<NicInfo> nics = [];
+  bool _nicsReady = false;
   String? probeError;
   final List<String> logs = [];
   final List<String> chat = [];
@@ -111,6 +112,10 @@ class CallController extends ChangeNotifier {
     } catch (error) {
       probeError = '$error';
       log('网卡枚举失败：$error');
+    } finally {
+      _nicsReady = true;
+      _scheduler?.noteNicMapReady();
+      _flushCandidates();
     }
   }
 
@@ -479,7 +484,7 @@ class CallController extends ChangeNotifier {
     await _closePeer();
     final pc = await createPeerConnection(buildPeerConnectionConfig());
     _pc = pc;
-    _scheduler = CandidateScheduler(nics: nics, fallback: fallback);
+    _scheduler = CandidateScheduler(nics: nics, fallback: fallback, nicMapReady: _nicsReady);
     schedulerText = _scheduler!.describe();
     _remoteSet = false;
     _pendingRemote.clear();
@@ -886,11 +891,11 @@ class CallController extends ChangeNotifier {
       _sendRaw({
         'type': 'signal',
         'kind': 'candidate',
-        'candidate': item.parsed.signaledLine,
+        'candidate': scheduler.lineToSignal(item),
         'sdpMid': item.sdpMid,
         'sdpMLineIndex': item.sdpMLineIndex,
       });
-      log('发布候选 ${item.parsed.tier.name} ${item.parsed.address}');
+      log('发布候选 ${scheduler.tierOf(item).name} ${item.parsed.address}');
     }
     if (ready.isNotEmpty) _notify();
   }

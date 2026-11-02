@@ -20,26 +20,47 @@ class OutgoingCandidate {
 /// check paths whose candidates they have been told about.
 class CandidateScheduler {
   CandidateScheduler({
-    required List<NicInfo> nics,
+    required this._nics,
     this.fallback = const Duration(seconds: 5),
     this.maxGatherWait = const Duration(seconds: 4),
-  }) : _bypassReason = canPreferInterfaces(nics) ? BypassReason.none : BypassReason.noNicMap;
+    this.nicMapWait = const Duration(seconds: 15),
+    this._nicMapReady = false,
+  });
 
   final Duration fallback;
   final Duration maxGatherWait;
+  final Duration nicMapWait;
+  final List<NicInfo> _nics;
 
   final List<OutgoingCandidate> _items = [];
   DateTime? _firstAt;
   DateTime? _preferredAt;
   ReleasePhase _phase = ReleasePhase.holding;
   PathTier? _preferred;
-  BypassReason _bypassReason;
+  BypassReason _bypassReason = BypassReason.none;
   bool _gatheringDone = false;
   bool _sealed = false;
+  bool _nicMapReady;
+  bool _sawMdns = false;
+  bool _holdingForNics = false;
 
   ReleasePhase get phase => _phase;
   BypassReason get bypassReason => _bypassReason;
   PathTier? get preferredTier => _preferred;
+
+  /// The Windows probe can finish after the first candidates arrive.
+  /// Call this when enumeration succeeds or fails so we stop waiting.
+  void noteNicMapReady() {
+    _nicMapReady = true;
+  }
+
+  PathTier tierOf(OutgoingCandidate item) {
+    return tierForCandidate(type: item.parsed.type, address: item.parsed.address, nics: _nics);
+  }
+
+  String lineToSignal(OutgoingCandidate item) {
+    return signaledLineFor(item.parsed, _nics);
+  }
 
   void add(
     ParsedCandidate candidate, {
@@ -47,8 +68,8 @@ class CandidateScheduler {
     int? sdpMLineIndex,
     required DateTime now,
   }) {
-    if (candidate.tier == PathTier.mdnsHost && _bypassReason == BypassReason.none) {
-      _bypassReason = BypassReason.mdns;
+    if (tierForCandidate(type: candidate.type, address: candidate.address, nics: _nics) == PathTier.mdnsHost) {
+      _sawMdns = true;
     }
     _firstAt ??= now;
     _items.add(OutgoingCandidate(candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex));
@@ -59,6 +80,8 @@ class CandidateScheduler {
   }
 
   void seal() {
+    _refreshGate(DateTime.now());
+    if (_holdingForNics) return;
     if (_bypassReason == BypassReason.none && _phase != ReleasePhase.all) {
       _sealed = true;
       _phase = ReleasePhase.sealed;
@@ -67,6 +90,8 @@ class CandidateScheduler {
 
   List<OutgoingCandidate> drain(DateTime now) {
     if (_sealed) return const [];
+    _refreshGate(now);
+    if (_holdingForNics) return const [];
     if (_bypassReason != BypassReason.none) {
       _phase = ReleasePhase.all;
       return _take((item) => true);
@@ -75,12 +100,36 @@ class CandidateScheduler {
     if (_phase == ReleasePhase.all) return _take((item) => true);
     final preferred = _preferred;
     if (_phase == ReleasePhase.preferred && preferred != null) {
-      return _take((item) => item.parsed.tier == preferred);
+      return _take((item) => tierOf(item) == preferred);
     }
     return const [];
   }
 
+  void _refreshGate(DateTime now) {
+    if (_sawMdns) {
+      _holdingForNics = false;
+      _bypassReason = BypassReason.mdns;
+      return;
+    }
+    if (canPreferInterfaces(_nics)) {
+      _holdingForNics = false;
+      _bypassReason = BypassReason.none;
+      return;
+    }
+    final started = _firstAt ?? now;
+    final stillWaiting = !_nicMapReady && now.difference(started) < nicMapWait;
+    if (stillWaiting) {
+      _holdingForNics = true;
+      _bypassReason = BypassReason.none;
+      _phase = ReleasePhase.holding;
+      return;
+    }
+    _holdingForNics = false;
+    _bypassReason = BypassReason.noNicMap;
+  }
+
   String describe() {
+    if (_holdingForNics) return '正在识别网卡，先不发布候选';
     switch (_bypassReason) {
       case BypassReason.mdns:
         return '宿主候选是 mDNS（*.local），无法区分局域网和 ZeroTier，已全部发布';
@@ -129,11 +178,11 @@ class CandidateScheduler {
   }
 
   bool _hasUnsent(PathTier tier) {
-    return _items.any((item) => !item.signaled && item.parsed.tier == tier);
+    return _items.any((item) => !item.signaled && tierOf(item) == tier);
   }
 
   bool _hasAny(PathTier tier) {
-    return _items.any((item) => item.parsed.tier == tier);
+    return _items.any((item) => tierOf(item) == tier);
   }
 
   List<OutgoingCandidate> _take(bool Function(OutgoingCandidate item) ready) {

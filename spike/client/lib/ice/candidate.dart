@@ -96,3 +96,14 @@ ParsedCandidate? parseCandidateLine(String line, List<NicInfo> nics) {
     port: port,
   );
 }
+
+/// Reclassify against the NIC list we have now. The tier stored at parse time
+/// is stale when Windows interface enumeration finishes after ICE gathering.
+String signaledLineFor(ParsedCandidate parsed, List<NicInfo> nics) {
+  final tier = tierForCandidate(type: parsed.type, address: parsed.address, nics: nics);
+  final rewritten = _rewriteHost(tier) ? withLocalPreference(parsed.priority, desiredLocalPreference(tier)) : parsed.priority;
+  final parts = parsed.raw.split(' ');
+  if (parts.length < 4) return parsed.raw;
+  parts[3] = '$rewritten';
+  return parts.join(' ');
+}

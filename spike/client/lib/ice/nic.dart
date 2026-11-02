@@ -84,11 +84,11 @@ bool _isVirtualOther(String name, String description) {
 
 String normalizeIp(String address) {
   var ip = address.trim().toLowerCase();
-  final zone = ip.indexOf('%');
-  if (zone >= 0) ip = ip.substring(0, zone);
   if (ip.startsWith('[') && ip.endsWith(']') && ip.length > 2) {
     ip = ip.substring(1, ip.length - 1);
   }
+  final zone = ip.indexOf('%');
+  if (zone >= 0) ip = ip.substring(0, zone);
   return ip;
 }
 

@@ -112,7 +112,7 @@ void main() {
     expect(scheduler.drain(start).map((item) => item.parsed.address), ['abcd.local', '203.0.113.8']);
     expect(scheduler.bypassReason, BypassReason.mdns);
 
-    final blind = CandidateScheduler(nics: const []);
+    final blind = CandidateScheduler(nics: const [], nicMapReady: true);
     blind.add(parseCandidateLine('candidate:1 1 UDP 2122260223 192.168.1.10 9 typ host', const [])!, now: start);
     expect(blind.drain(start), isNotEmpty);
     expect(blind.bypassReason, BypassReason.noNicMap);
@@ -184,5 +184,65 @@ void main() {
       {'id': 'R', 'type': 'remote-candidate', 'candidateType': 'srflx', 'ip': '198.51.100.9', 'port': 20001},
     ], nics);
     expect(public.label, '公网 P2P');
+  });
+
+  test('Windows LAN and ZeroTier names share one classification with the scheduler', () {
+    const ztName = 'ZeroTier One [166359304e7a07aa]';
+    const lanName = '以太网 3';
+    const lanDescription = 'Realtek PCIe 2.5GbE Family Controller';
+    expect(classifyInterface(name: ztName), NicKind.zerotier);
+    expect(classifyInterface(name: lanName, description: lanDescription), NicKind.lan);
+    expect(normalizeIp('fe80::abcd%3'), normalizeIp('[fe80::abcd%14]'));
+    expect(
+      kindForAddress('fe80::abcd%3', [
+        NicInfo(
+          name: lanName,
+          description: lanDescription,
+          kind: NicKind.lan,
+          addresses: ['192.168.31.180', 'fe80::abcd%14'],
+        ),
+      ]),
+      NicKind.lan,
+    );
+
+    final discovered = <NicInfo>[];
+    final scheduler = CandidateScheduler(nics: discovered, fallback: const Duration(seconds: 5));
+    final start = DateTime.utc(2026);
+    ParsedCandidate line(String address, int priority, String type) {
+      return parseCandidateLine('candidate:1 1 UDP $priority $address 9 typ $type', const [])!;
+    }
+
+    scheduler.add(line('192.168.31.180', 2122260223, 'host'), now: start);
+    scheduler.add(line('10.30.249.106', 2122260223, 'host'), now: start);
+    scheduler.add(line('203.0.113.8', 1686052607, 'srflx'), now: start);
+    expect(scheduler.drain(start), isEmpty);
+    expect(scheduler.describe(), '正在识别网卡，先不发布候选');
+    expect(scheduler.bypassReason, isNot(BypassReason.noNicMap));
+
+    discovered.addAll([
+      NicInfo(
+        name: ztName,
+        description: 'ZeroTier Virtual Port',
+        kind: classifyInterface(name: ztName, description: 'ZeroTier Virtual Port'),
+        addresses: ['10.30.249.106'],
+      ),
+      NicInfo(
+        name: lanName,
+        description: lanDescription,
+        kind: classifyInterface(name: lanName, description: lanDescription),
+        addresses: ['192.168.31.180', 'fe80::abcd%14'],
+      ),
+    ]);
+    scheduler.noteNicMapReady();
+    final preferred = scheduler.drain(start);
+    expect(preferred.map((item) => item.parsed.address), ['192.168.31.180']);
+    expect(scheduler.tierOf(preferred.single), PathTier.lan);
+    expect((int.parse(scheduler.lineToSignal(preferred.single).split(' ')[3]) >> 8) & 0xffff, 65535);
+    expect(scheduler.describe(), contains('局域网'));
+    expect(scheduler.bypassReason, BypassReason.none);
+
+    final rest = scheduler.drain(start.add(const Duration(seconds: 5)));
+    expect(rest.map((item) => item.parsed.address), containsAll(['10.30.249.106', '203.0.113.8']));
+    expect(scheduler.tierOf(rest.firstWhere((item) => item.parsed.address == '10.30.249.106')), PathTier.zerotier);
   });
 }
