@@ -25,6 +25,10 @@ import 'rtc_config.dart';
 
 const maxSpikeFileBytes = 256 * 1024 * 1024;
 
+/// 等待对端 direct-listen 并建立 TCP 直连的最长时间。
+/// 超过此时间仍未就绪，才回退到数据通道，避免 8 秒硬等导致过早放弃直连。
+const directLinkWait = Duration(seconds: 15);
+
 class CallController extends ChangeNotifier {
   String signalingUrl = 'ws://127.0.0.1:8787';
   String roomCode = '';
@@ -84,6 +88,7 @@ class CallController extends ChangeNotifier {
   bool _autorun = false;
   bool _autorunSent = false;
   bool _autorunFinished = false;
+  bool _spikeLog = false;
   int _autorunBytes = 8 * 1024 * 1024;
   String? _autorunResult;
   String? _preferredRole;
@@ -138,6 +143,12 @@ class CallController extends ChangeNotifier {
 
   Future<void> maybeAutorun() async {
     if (Platform.environment['SPIKE_AUTORUN'] != '1') return;
+    _spikeLog = Platform.environment['SPIKE_LOG'] == '1';
+    final delayJoin = int.tryParse(Platform.environment['SPIKE_DELAY_JOIN'] ?? '');
+    if (delayJoin != null && delayJoin > 0) {
+      log('SPIKE_DELAY_JOIN：延迟 $delayJoin 秒再连接');
+      await Future<void>.delayed(Duration(seconds: delayJoin));
+    }
     _autorun = true;
     signalingUrl = Platform.environment['SPIKE_URL'] ?? signalingUrl;
     roomCode = Platform.environment['SPIKE_ROOM'] ?? 'autorun1';
@@ -298,6 +309,13 @@ class CallController extends ChangeNotifier {
       return;
     }
     _watch?.beginTransfer();
+    if (_fileTransport == 'direct' && _directLink == null) {
+      _logDirect('直连尚未就绪，等待对端 direct-listen（最多 ${directLinkWait.inSeconds} 秒）...');
+      final deadline = DateTime.now().add(directLinkWait);
+      while (_directLink == null && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
     final payloads = await _collectPayloads(chunks, size);
     final id = _newId();
     _sendingId = id;
@@ -451,6 +469,7 @@ class CallController extends ChangeNotifier {
   }
 
   void _onSocketData(dynamic data) {
+    if (_autorunFinished) return;
     final text = data is String ? data : utf8.decode(data as List<int>);
     final event = parseServerEvent(text);
     switch (event) {
@@ -684,14 +703,7 @@ class CallController extends ChangeNotifier {
       final acked = await _helloAndWaitForAck();
       if (!acked) log('文字回执超时，仍继续传文件');
       if (_fileTransport == 'direct') {
-        final deadline = DateTime.now().add(const Duration(seconds: 8));
-        while (_directLink == null && DateTime.now().isBefore(deadline)) {
-          await Future<void>.delayed(const Duration(milliseconds: 50));
-        }
-        if (_directLink == null) {
-          _directError ??= '直连未就绪';
-          log('直连未就绪，改走数据通道');
-        }
+        _logDirect('直连模式：不在通道打开时硬等，改在 sendFileStream 中等待对端 direct-listen');
       }
       await sendTestPayload(_autorunBytes);
     }
@@ -831,6 +843,7 @@ class CallController extends ChangeNotifier {
   }
 
   Future<void> _onTextMessage(String raw) async {
+    if (_autorunFinished) return;
     final message = parseSpikeMessage(raw);
     switch (message) {
       case TextSpike(:final body):
@@ -1238,6 +1251,11 @@ class CallController extends ChangeNotifier {
     if (logs.length > 300) logs.removeLast();
     if (_autorun) stdout.writeln(message);
     _notify();
+  }
+
+  void _logDirect(String message) {
+    if (!_spikeLog) return;
+    log('[direct] $message');
   }
 
   void _notify() {

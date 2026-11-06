@@ -21,11 +21,17 @@ $ips = @(Get-NetIPAddress | Where-Object { $_.AddressFamily -eq 'IPv4' -or $_.Ad
       '-NonInteractive',
       '-Command',
       script,
-    ]).timeout(const Duration(seconds: 8));
+    ]).timeout(const Duration(seconds: 5));
     if (result.exitCode != 0) {
-      throw Exception('Get-NetAdapter 失败：${result.stderr}'.trim());
+      stdout.writeln('Windows 网卡探测退出码 ${result.exitCode}，返回空列表');
+      return const [];
     }
-    return parseWindowsNetJson(result.stdout.toString());
+    try {
+      return parseWindowsNetJson(result.stdout.toString());
+    } catch (error) {
+      stdout.writeln('Windows 网卡 JSON 解析失败：$error，返回空列表');
+      return const [];
+    }
   }
   return const [];
 }
