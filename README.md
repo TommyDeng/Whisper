@@ -4,6 +4,9 @@
 
 文档见 `docs/`。
 
+- [已确认决策](docs/decisions.md)
+- [WebRTC spike 暂停快照](docs/spike-status.md)
+
 ## WebRTC spike
 
 `spike/` 是 Stage 2 的 `feat/webrtc-spike`：两台桌面客户端用粘贴的房间码配对，经本地 Cloudflare Worker + Durable Object 交换信令，然后：
