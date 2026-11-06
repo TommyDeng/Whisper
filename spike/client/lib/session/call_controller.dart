@@ -565,7 +565,8 @@ class CallController extends ChangeNotifier {
 
   Future<void> _startPeer() async {
     await _closePeer();
-    final pc = await createPeerConnection(buildPeerConnectionConfig());
+    final config = await buildPeerConnectionConfig(signalingUrl: signalingUrl);
+    final pc = await createPeerConnection(config);
     _pc = pc;
     _scheduler = CandidateScheduler(
       nics: nics,
