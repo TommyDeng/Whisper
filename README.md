@@ -4,6 +4,8 @@
 
 文档见 `docs/`。
 
+## 项目资料
+
 - [已确认决策](docs/decisions.md)
 - [WebRTC spike 暂停快照](docs/spike-status.md)
 
