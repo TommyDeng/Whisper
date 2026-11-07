@@ -1,11 +1,11 @@
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:whisper_webrtc_spike/ice/candidate.dart';
-import 'package:whisper_webrtc_spike/session/autorun_config.dart';
-import 'package:whisper_webrtc_spike/session/rtc_config.dart';
-import 'package:whisper_webrtc_spike/signaling/address.dart';
-import 'package:whisper_webrtc_spike/signaling/events.dart';
+import 'package:whisper/ice/candidate.dart';
+import 'package:whisper/session/autorun_config.dart';
+import 'package:whisper/session/rtc_config.dart';
+import 'package:whisper/signaling/address.dart';
+import 'package:whisper/signaling/events.dart';
 
 void main() {
   test('builds a room websocket url and a health url', () {
