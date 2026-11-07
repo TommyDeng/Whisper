@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:whisper/main.dart';
+import 'package:whisper/ui/main_app.dart';
 
 void main() {
-  testWidgets('shows the spike shell', (tester) async {
-    await tester.pumpWidget(const WhisperSpikeApp());
-    expect(find.text('耳语 WebRTC Spike'), findsOneWidget);
-    expect(find.text('DTLS-SRTP：开启（未关闭）。状态 —。应用层 E2EE：本 spike 没有。'), findsOneWidget);
+  testWidgets('shows whisper app shell', (tester) async {
+    await tester.pumpWidget(const WhisperApp());
+
+    expect(find.text('联系人').first, findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }
