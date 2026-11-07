@@ -1,0 +1,21 @@
+{
+  // Local WebRTC signaling spike. Do not deploy from this project:
+  // no routes, no workers_dev publish, no secrets.
+  // Privacy (PRD §5): Workers Logs stay off so the platform does not
+  // record client IPs. The Worker itself does not log SDP, candidates, or IPs.
+  "name": "whisper-webrtc-spike",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": false
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOMS", "class_name": "RoomDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RoomDO"] }
+  ]
+}
