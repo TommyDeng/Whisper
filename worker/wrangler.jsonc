@@ -1,0 +1,19 @@
+{
+  // 耳语 Whisper 中继：Cloudflare Workers + Durable Objects
+  // 每会话一个 DO，仅负责 WebSocket 密文中继、WebRTC 信令和离线密文队列。
+  "name": "whisper-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": false
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOMS", "class_name": "RoomDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RoomDO"] }
+  ]
+}
