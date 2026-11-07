@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { parseClientMessage } from "./protocol";
+import { parseClientMessage, type SignalOutbound } from "./protocol";
 
 type Role = "offerer" | "answerer";
 
@@ -14,6 +14,15 @@ type Attachment = {
 const RATE_WINDOW_MS = 10_000;
 const RATE_LIMIT = 80;
 
+// 离线消息最长保留 7 天（秒）
+const OFFLINE_MSG_TTL_SECONDS = 7 * 24 * 60 * 60; // 604800
+
+// 单条离线消息最大 256 KiB
+const MAX_OFFLINE_MSG_BYTES = 256 * 1024;
+
+// 每个会话离线消息最大条数
+const MAX_OFFLINE_MSGS_PER_ROOM = 1000;
+
 function sendJson(ws: WebSocket, value: unknown): void {
   ws.send(JSON.stringify(value));
 }
@@ -21,6 +30,13 @@ function sendJson(ws: WebSocket, value: unknown): void {
 function peersExcept(all: WebSocket[], self: WebSocket): WebSocket[] {
   return all.filter((ws) => ws !== self && ws.readyState === WebSocket.OPEN);
 }
+
+type OfflineMessage = {
+  id: string;
+  from: string;
+  payload: string; // JSON 字符串的 E2EE 密文消息
+  timestamp: number;
+};
 
 export class RoomDO extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
@@ -56,6 +72,20 @@ export class RoomDO extends DurableObject<Env> {
       }
     }
 
+    // 新加入的客户端：拉取并发送所有离线消息
+    const offlineMsgs = await this.getOfflineMessages();
+    for (const msg of offlineMsgs) {
+      try {
+        server.send(msg.payload);
+      } catch {
+        // 发送失败忽略
+      }
+    }
+    // 发送完离线消息后，删除已发送的
+    for (const msg of offlineMsgs) {
+      await this.ctx.storage.delete(`msg:${msg.id}`);
+    }
+
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -73,14 +103,115 @@ export class RoomDO extends DurableObject<Env> {
       sendJson(ws, { type: "error", error: parsed.error });
       return;
     }
-    if (parsed.message.type === "ping") {
+    const { message: msg } = parsed;
+
+    if (msg.type === "ping") {
       sendJson(ws, { type: "pong" });
       return;
     }
-    const payload = JSON.stringify(parsed.message.outbound);
-    for (const peer of peersExcept(this.ctx.getWebSockets(), ws)) {
-      peer.send(payload);
+
+    if (msg.type !== "signal") {
+      sendJson(ws, { type: "error", error: "unsupported-message-type" });
+      return;
     }
+
+    const outbound = msg.outbound as { kind: string; [key: string]: unknown };
+    const kind = outbound.kind;
+
+    // 处理 ACK：删除对应的离线消息
+    if (kind === "ack") {
+      const msgId = (outbound as { id?: string }).id;
+      if (msgId) {
+        await this.ctx.storage.delete(`msg:${msgId}`);
+      }
+      return;
+    }
+
+    // 处理文件传输消息（文件块较大，做额外大小检查）
+    const payload = JSON.stringify(outbound);
+    if (
+      (kind === "file-chunk" || kind === "file-start" || kind === "file-end") &&
+      new TextEncoder().encode(payload).byteLength > MAX_OFFLINE_MSG_BYTES
+    ) {
+      sendJson(ws, { type: "error", error: "message-too-large" });
+      return;
+    }
+
+    const peers = peersExcept(this.ctx.getWebSockets(), ws);
+
+    // 如果对方在线，直接转发
+    if (peers.length > 0) {
+      for (const peer of peers) {
+        peer.send(payload);
+      }
+      return;
+    }
+
+    // 对方离线，将密文存入 DO 存储（离线队列）
+    const senderId = attachmentOf(ws)?.id ?? crypto.randomUUID();
+    await this.storeOfflineMessage(outbound, senderId);
+    sendJson(ws, {
+      type: "ack",
+      id: (outbound as { id?: string }).id ?? crypto.randomUUID(),
+    });
+  }
+
+  /// 将一条离线密文消息持久化到 DO 存储，7 天后自动过期。
+  private async storeOfflineMessage(
+    outbound: Record<string, unknown>,
+    fromAttachmentId: string
+  ): Promise<void> {
+    const id = (outbound as { id?: string }).id ?? crypto.randomUUID();
+    const now = Date.now();
+
+    const msg: OfflineMessage = {
+      id,
+      from: fromAttachmentId,
+      payload: JSON.stringify(outbound),
+      timestamp: now,
+    };
+
+    // 清理过期消息（每次写入时轻量清理）
+    await this.purgeExpiredMessages();
+
+    // 如果离线消息过多，删除最旧的一条
+    const existing = Array.from(await this.ctx.storage.list<OfflineMessage>({ prefix: "msg:" }));
+    if (existing.length >= MAX_OFFLINE_MSGS_PER_ROOM) {
+      const oldest = existing.sort((a, b) => a[0].localeCompare(b[0]))[0];
+      if (oldest) {
+        await this.ctx.storage.delete(oldest[0]);
+      }
+    }
+
+    await this.ctx.storage.put(`msg:${id}`, msg);
+  }
+
+  /// 删除 7 天前的过期离线消息。
+  private async purgeExpiredMessages(): Promise<void> {
+    const cutoff = Date.now() - OFFLINE_MSG_TTL_SECONDS;
+    const list = Array.from(await this.ctx.storage.list<OfflineMessage>({ prefix: "msg:" }));
+    const deletions: Promise<unknown>[] = [];
+    for (const key of list.slice(0, 50)) {
+      const stored = key[1];
+      if (stored && stored.timestamp < cutoff) {
+        deletions.push(this.ctx.storage.delete(key[0]));
+      }
+    }
+    if (deletions.length > 0) {
+      await Promise.all(deletions);
+    }
+  }
+
+  /// 获取当前所有离线消息（对方上线时拉取）。
+  private async getOfflineMessages(): Promise<OfflineMessage[]> {
+    await this.purgeExpiredMessages();
+    const list = Array.from(await this.ctx.storage.list<OfflineMessage>({ prefix: "msg:" }));
+    const msgs: OfflineMessage[] = [];
+    for (const key of list) {
+      const stored = key[1];
+      if (stored) msgs.push(stored);
+    }
+    return msgs.sort((a, b) => a.timestamp - b.timestamp);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean): Promise<void> {
