@@ -29,7 +29,7 @@ class SafetyCode {
     final groups = <String>[];
     for (var i = 0; i < 60; i += 5) {
       final groupHex = hex.substring(i, i + 5);
-      final groupInt = int.parse(groupHex, radix: 16);
+      final groupInt = int.parse(groupHex, radix: 16) % 100000;
       groups.add(groupInt.toString().padLeft(5, '0'));
     }
     return groups.join(' ');
