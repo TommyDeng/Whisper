@@ -1,11 +1,12 @@
 {
-  "name": "whisper-relay",
+  "name": "whisper-webrtc-spike-signaling",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --ip 0.0.0.0 --port 8787",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.4.12",

@@ -1,9 +1,11 @@
 {
-  // 耳语 Whisper 中继：Cloudflare Workers + Durable Objects
-  // 每会话一个 DO，仅负责 WebSocket 密文中继、WebRTC 信令和离线密文队列。
-  "name": "whisper-relay",
+  // Local WebRTC signaling spike. Do not deploy from this project:
+  // no routes, no workers_dev publish, no secrets.
+  // Privacy (PRD §5): Workers Logs stay off so the platform does not
+  // record client IPs. The Worker itself does not log SDP, candidates, or IPs.
+  "name": "whisper-webrtc-spike",
   "main": "src/index.ts",
-  "compatibility_date": "2026-11-06",
+  "compatibility_date": "2026-11-02",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": false
