@@ -5,15 +5,28 @@ build/
 *.iml
 .idea/
 .vscode/
+*.log
+.DS_Store
 
+# Flutter project root
+.metadata
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Worker
+worker/node_modules/
+worker/.wrangler/
+worker/dist/
+
+# spike
 spike/signaling/node_modules/
 spike/signaling/.wrangler/
 spike/signaling/dist/
-
 spike/client/.flutter-plugins
 spike/client/.flutter-plugins-dependencies
 spike/client/build/
 spike/client/.dart_tool/
 
-*.log
-.DS_Store
+# Local secrets (do not commit)
+spike/signaling/.dev.vars
+worker/.dev.vars

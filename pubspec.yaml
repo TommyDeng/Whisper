@@ -1,0 +1,26 @@
+name: whisper
+description: "耳语 Whisper：端到端加密聊天与语音客户端（Flutter，Windows / Linux 优先）。"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  convert: ^3.1.2
+  crypto: ^3.0.6
+  cryptography: ^2.7.0
+  file_selector: ^1.0.4
+  flutter_webrtc: 1.6.3
+  web_socket_channel: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
