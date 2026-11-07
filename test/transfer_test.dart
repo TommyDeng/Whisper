@@ -1,10 +1,10 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:whisper_webrtc_spike/transfer/bytes.dart';
-import 'package:whisper_webrtc_spike/transfer/chunk_pump.dart';
-import 'package:whisper_webrtc_spike/transfer/frames.dart';
-import 'package:whisper_webrtc_spike/transfer/messages.dart';
+import 'package:whisper/transfer/bytes.dart';
+import 'package:whisper/transfer/chunk_pump.dart';
+import 'package:whisper/transfer/frames.dart';
+import 'package:whisper/transfer/messages.dart';
 
 void main() {
   test('round-trips text and file messages', () {

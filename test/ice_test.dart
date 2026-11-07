@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:whisper_webrtc_spike/ice/candidate.dart';
-import 'package:whisper_webrtc_spike/ice/nic.dart';
-import 'package:whisper_webrtc_spike/ice/path_stats.dart';
-import 'package:whisper_webrtc_spike/ice/scheduler.dart';
+import 'package:whisper/ice/candidate.dart';
+import 'package:whisper/ice/nic.dart';
+import 'package:whisper/ice/path_stats.dart';
+import 'package:whisper/ice/scheduler.dart';
 
 void main() {
   final nics = [

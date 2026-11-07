@@ -1,6 +1,6 @@
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:whisper_webrtc_spike/session/progress_timeout.dart';
+import 'package:whisper/session/progress_timeout.dart';
 
 void main() {
   test('stall timer resets when another frame arrives', () async {

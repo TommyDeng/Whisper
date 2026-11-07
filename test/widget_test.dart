@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:whisper_webrtc_spike/main.dart';
+import 'package:whisper/main.dart';
 
 void main() {
   testWidgets('shows the spike shell', (tester) async {

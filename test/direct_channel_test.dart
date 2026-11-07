@@ -3,8 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:whisper_webrtc_spike/transfer/direct_channel.dart';
-import 'package:whisper_webrtc_spike/transfer/frames.dart';
+import 'package:whisper/transfer/direct_channel.dart';
+import 'package:whisper/transfer/frames.dart';
 
 void main() {
   test('direct file key is bound to the DTLS fingerprint pair', () {
