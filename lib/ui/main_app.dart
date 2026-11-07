@@ -5,7 +5,9 @@
 
 import 'package:flutter/material.dart';
 import 'app_theme.dart';
+import 'call_screen.dart';
 import 'contacts_list.dart';
+import '../contact/contact_model.dart';
 
 /// 主应用
 class WhisperApp extends StatefulWidget {
@@ -18,10 +20,21 @@ class WhisperApp extends StatefulWidget {
 class _WhisperAppState extends State<WhisperApp> {
   int _selectedIndex = 0;
 
+  static final _callContact = Contact(
+    deviceId: 'local-device',
+    name: '通话',
+    x25519PublicKeyBase64: '',
+    ed25519PublicKeyBase64: '',
+    safetyCode: '',
+    isVerified: true,
+    createdAt: DateTime.now().millisecondsSinceEpoch,
+    lastMessageTime: 0,
+  );
+
   final List<Widget> _screens = [
     const ContactsListScreen(),
     const Placeholder(),
-    const Placeholder(),
+    CallScreen(contactName: '通话', contact: _callContact),
   ];
 
   final List<String> _titles = [
