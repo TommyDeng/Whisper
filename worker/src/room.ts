@@ -39,7 +39,20 @@ type OfflineMessage = {
 };
 
 export class RoomDO extends DurableObject<Env> {
+  // TURN 中继流量统计（本 DO 实例的 WebSocket 消息字节数）
+  turnBytes = 0;
+
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    // 非 WebSocket 请求：处理 TURN 用量查询
+    if (request.method === "GET" && url.pathname === "/turn-usage") {
+      return Response.json(
+        { ok: true, room: this.ctx.id.toString(), turnBytes: this.turnBytes },
+        { headers: { "cache-control": "no-store" } },
+      );
+    }
+
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("expected websocket", { status: 426 });
     }
@@ -77,6 +90,7 @@ export class RoomDO extends DurableObject<Env> {
     for (const msg of offlineMsgs) {
       try {
         server.send(msg.payload);
+        this.turnBytes += new TextEncoder().encode(msg.payload).byteLength;
       } catch {
         // 发送失败忽略
       }
@@ -138,6 +152,9 @@ export class RoomDO extends DurableObject<Env> {
     }
 
     const peers = peersExcept(this.ctx.getWebSockets(), ws);
+
+    // 统计消息字节数作为 TURN 中继流量（所有通过 DO 的消息都经过中继）
+    this.turnBytes += new TextEncoder().encode(message).byteLength;
 
     // 如果对方在线，直接转发
     if (peers.length > 0) {
