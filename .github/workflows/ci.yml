@@ -3,11 +3,12 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -60,11 +61,11 @@ jobs:
       - run: flutter config --enable-linux-desktop
       - run: flutter pub get
       - run: flutter build linux --release
-      - name: Pack the Linux bundle
+      - name: Pack Linux tar.gz
         run: tar -C build/linux/x64/release -czf whisper-linux.tar.gz bundle
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: whisper-linux
+          name: whisper-linux-tar.gz
           path: whisper-linux.tar.gz
           if-no-files-found: error
 
@@ -85,3 +86,35 @@ jobs:
           name: whisper-windows
           path: build/windows/x64/runner/Release
           if-no-files-found: error
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@a690289f89482272e2e7fb3284fb97ed8942fc90
+        with:
+          path: artifacts
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cd ..
+      - name: Sign SHA256SUMS with GPG
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --import
+          echo "$GPG_PASSPHRASE" | gpg --batch --passphrase-fd 0 --detach-sign --armor artifacts/SHA256SUMS
+      - name: Create Release
+        uses: softprops/action-gh-release@de220e74b04514a7259e787f91a6c5d4357682c
+        with:
+          files: |
+            artifacts/*
+            artifacts/SHA256SUMS
+            artifacts/SHA256SUMS.sig
+          fail_on_missing_files: false
+          draft: false
+          prerelease: false
