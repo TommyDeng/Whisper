@@ -6,8 +6,6 @@
 import 'package:flutter/material.dart';
 import 'app_theme.dart';
 import 'contacts_list.dart';
-import 'chat_screen.dart';
-import 'call_screen.dart';
 
 /// 主应用
 class WhisperApp extends StatefulWidget {
@@ -135,30 +133,6 @@ class _WhisperAppState extends State<WhisperApp> {
         ),
       ),
     );
-  }
-}
-
-/// 聊天页面占位（点击联系人后进入）
-class ChatPlaceholder extends StatelessWidget {
-  final String contactName;
-
-  const ChatPlaceholder({super.key, required this.contactName});
-
-  @override
-  Widget build(BuildContext context) {
-    return ChatScreen(contactName: contactName);
-  }
-}
-
-/// 通话页面占位
-class CallPlaceholder extends StatelessWidget {
-  final String contactName;
-
-  const CallPlaceholder({super.key, required this.contactName});
-
-  @override
-  Widget build(BuildContext context) {
-    return CallScreen(contactName: contactName);
   }
 }
 

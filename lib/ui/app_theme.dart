@@ -13,6 +13,9 @@ class AppTheme {
   static const Color white = Color(0xFFFFFFFF);
   static const Color surface = Color(0xFFF5F5F5);
 
+  /// 错误提示颜色
+  static const Color red = Color(0xFFB00020);
+
   /// 安全状态颜色：已验证=深绿灰，未验证=琥珀色
   static const Color securityVerified = Color(0xFF4A4A4A);
   static const Color securityUnverified = Color(0xFF8A8A8A);

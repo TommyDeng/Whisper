@@ -4,20 +4,63 @@
 /// 黑白/单色细线条风格，安全状态常驻显示
 
 import 'package:flutter/material.dart';
+
+import '../contact/contact.dart';
+import '../voice/ice_strategy.dart';
+import '../voice/voice_call.dart';
 import 'app_theme.dart';
 
 /// 通话界面
 class CallScreen extends StatefulWidget {
   final String contactName;
+  final Contact contact;
 
-  const CallScreen({super.key, required this.contactName});
+  const CallScreen({super.key, required this.contactName, required this.contact});
 
   @override
   State<CallScreen> createState() => _CallScreenState();
 }
 
 class _CallScreenState extends State<CallScreen> {
+  late final VoiceCall _call;
   bool _isMuted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _call = VoiceCall(
+      iceStrategy: IceStrategy(
+        lanAddresses: const ['192.168.1.0/24'],
+        zerotierAddresses: const ['10.30.0.0/16'],
+      ),
+      onRemoteCandidate: (candidate, sdpMid, sdpMLineIndex) {
+        // 通过信令发送候选给对端
+      },
+      onRemoteOffer: (sdp) {
+        // 通过信令发送 offer 给对端
+      },
+      onRemoteAnswer: (sdp) {
+        // 通过信令接收 answer
+      },
+      onStateChanged: (state) {
+        setState(() {});
+      },
+      onPathChanged: (path) {
+        setState(() {});
+      },
+      onRemoteHangup: () {
+        Navigator.of(context).pop();
+      },
+    );
+    _call.initLocalAudio().catchError((_) {});
+    _call.createOffer().catchError((_) {});
+  }
+
+  @override
+  void dispose() {
+    _call.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,10 +78,13 @@ class _CallScreenState extends State<CallScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    SecurityIcon(status: SecurityStatus.unverified, size: 14),
+                    SecurityIcon(
+                      status: widget.contact.isVerified ? SecurityStatus.verified : SecurityStatus.unverified,
+                      size: 14,
+                    ),
                     const SizedBox(width: 8),
                     Text(
-                      '连接路径：ZeroTier',
+                      '连接路径：${_call.currentPath ?? '建立中…'}',
                       style: const TextStyle(
                         color: AppTheme.midGray,
                         fontSize: 12,
@@ -59,7 +105,7 @@ class _CallScreenState extends State<CallScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '通话中',
+                  _callStateText(_call.state),
                   style: const TextStyle(
                     color: AppTheme.darkGray,
                     fontSize: 14,
@@ -103,11 +149,7 @@ class _CallScreenState extends State<CallScreen> {
                       _isMuted ? Icons.mic_off : Icons.mic,
                       size: 24,
                     ),
-                    onPressed: () {
-                      setState(() {
-                        _isMuted = !_isMuted;
-                      });
-                    },
+                    onPressed: _call.toggleMute,
                     color: AppTheme.black,
                     padding: EdgeInsets.zero,
                   ),
@@ -124,6 +166,7 @@ class _CallScreenState extends State<CallScreen> {
                   child: IconButton(
                     icon: const Icon(Icons.call_end, size: 24),
                     onPressed: () {
+                      _call.hangup();
                       Navigator.of(context).pop();
                     },
                     color: AppTheme.white,
@@ -137,5 +180,20 @@ class _CallScreenState extends State<CallScreen> {
         ],
       ),
     );
+  }
+
+  String _callStateText(CallState state) {
+    switch (state) {
+      case CallState.idle:
+        return '未开始';
+      case CallState.calling:
+        return '呼叫中…';
+      case CallState.connected:
+        return '已连接';
+      case CallState.disconnected:
+        return '已断开';
+      case CallState.failed:
+        return '连接失败';
+    }
   }
 }
