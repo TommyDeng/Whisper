@@ -29,6 +29,7 @@ class CallScreen extends StatefulWidget {
 
 class _CallScreenState extends State<CallScreen> {
   late final CallController _controller;
+  final _urlController = TextEditingController(text: 'ws://192.168.31.236:8787');
   final _roomController = TextEditingController();
   bool _isConnecting = false;
   String? _connectError;
@@ -37,7 +38,7 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     _controller = CallController()
-      ..signalingUrl = 'ws://127.0.0.1:8787'
+      ..signalingUrl = _urlController.text
       ..roomCode = widget.contact.deviceId;
     _roomController.text = _controller.roomCode;
     _controller.addListener(_onControllerChanged);
@@ -47,6 +48,7 @@ class _CallScreenState extends State<CallScreen> {
   void dispose() {
     _controller.removeListener(_onControllerChanged);
     _controller.dispose();
+    _urlController.dispose();
     _roomController.dispose();
     super.dispose();
   }
@@ -61,7 +63,7 @@ class _CallScreenState extends State<CallScreen> {
       _isConnecting = true;
       _connectError = null;
     });
-    _controller.signalingUrl = 'ws://127.0.0.1:8787';
+    _controller.signalingUrl = _urlController.text.trim();
     _controller.roomCode = _roomController.text.trim();
     try {
       await _controller.connect();
@@ -144,8 +146,8 @@ class _CallScreenState extends State<CallScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: TextField(
-                        controller: TextEditingController(text: c.signalingUrl),
-                        enabled: false,
+                        controller: _urlController,
+                        enabled: !connected,
                         style: const TextStyle(
                           color: AppTheme.black,
                           fontSize: 12,
