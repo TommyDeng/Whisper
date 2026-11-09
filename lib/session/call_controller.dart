@@ -245,10 +245,11 @@ class CallController extends ChangeNotifier {
     _ping?.cancel();
     await _sub?.cancel();
     _sub = null;
+    // 先发送 bye 给对端，让信令服务器清理房间状态，再关闭 channel
+    await hangup(tellPeer: true);
     await _channel?.sink.close();
     _channel = null;
     signalingState = '已断开';
-    await hangup(tellPeer: false);
   }
 
   Future<void> hangup({bool tellPeer = true}) async {
