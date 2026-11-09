@@ -55,12 +55,8 @@ class _CallScreenState extends State<CallScreen> {
 
   void _onControllerChanged() {
     if (!mounted) return;
-    // 对端挂断导致信令状态变为已断开，自动返回通话列表
-    // 注意：只做 pop，不调用 disconnect（disconnect 内部会再次触发 _notify，导致无限递归）
-    if (_controller.signalingState == '已断开') {
-      Navigator.of(context).pop();
-      return;
-    }
+    // 对端挂断后只更新 UI 状态，不自动 pop（避免在已销毁 context 上调用 Navigator.pop 导致崩溃）
+    // 用户可手动点击系统后退返回联系人列表
     setState(() {});
   }
 
@@ -353,7 +349,9 @@ class _CallScreenState extends State<CallScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                calling ? '呼叫中…' : (inCall ? '通话中' : '等待对端'),
+                c.signalingState == '已断开'
+                    ? '对端已挂断'
+                    : (calling ? '呼叫中…' : (inCall ? '通话中' : '等待对端')),
                 style: const TextStyle(
                   color: AppTheme.darkGray,
                   fontSize: 14,
@@ -426,7 +424,7 @@ class _CallScreenState extends State<CallScreen> {
                     c.muted ? Icons.mic_off : Icons.mic,
                     size: 24,
                   ),
-                  onPressed: c.toggleMute,
+                  onPressed: c.signalingState == '已断开' ? null : c.toggleMute,
                   color: AppTheme.black,
                   padding: EdgeInsets.zero,
                 ),
@@ -442,10 +440,12 @@ class _CallScreenState extends State<CallScreen> {
                 ),
                 child: IconButton(
                   icon: const Icon(Icons.call_end, size: 24),
-                  onPressed: () {
-                    unawaited(_controller.hangup());
-                    Navigator.of(context).pop();
-                  },
+                  onPressed: c.signalingState == '已断开'
+                      ? null
+                      : () {
+                          unawaited(_controller.hangup());
+                          Navigator.of(context).pop();
+                        },
                   color: AppTheme.white,
                   padding: EdgeInsets.zero,
                 ),
