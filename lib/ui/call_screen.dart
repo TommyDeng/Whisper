@@ -55,6 +55,12 @@ class _CallScreenState extends State<CallScreen> {
 
   void _onControllerChanged() {
     if (!mounted) return;
+    // 对端挂断导致信令状态变为已断开，自动返回通话列表
+    if (_controller.signalingState == '已断开') {
+      unawaited(_controller.disconnect());
+      Navigator.of(context).pop();
+      return;
+    }
     setState(() {});
   }
 

@@ -1199,6 +1199,7 @@ class CallController extends ChangeNotifier {
     iceState = '—';
     pcState = '—';
     remoteAudio = false;
+    signalingState = '已断开';
     _notify();
   }
 
