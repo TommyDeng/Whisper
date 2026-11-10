@@ -5,7 +5,7 @@
 /// - 私钥经 flutter_secure_storage 存入系统安全存储（Windows DPAPI / Linux libsecret）
 /// - 安全码：双方公钥排序拼接后用 BLAKE2b/SHA-256 哈希，显示为 12 组 5 位数字
 
-library identity;
+library;
 
 export 'identity_store.dart';
 export 'safety_code.dart';
