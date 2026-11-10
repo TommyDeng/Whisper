@@ -9,10 +9,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../contact/contact.dart';
-import '../contact/contact_model.dart';
-import '../contact/contact_store.dart';
 import '../identity/identity.dart';
-import '../identity/identity_store.dart';
 import '../pairing/invitation_code.dart';
 import '../ui/chat_screen.dart';
 import 'app_theme.dart';
