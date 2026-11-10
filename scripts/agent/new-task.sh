@@ -31,8 +31,11 @@ cat > "$TASK_DIR/allowed_paths" <<'EOF'
 # test/transfer_test.dart
 EOF
 
+# 任务类型：logic（默认）或 mechanical，决定下级的推理强度，见 scripts/agent/models.conf
+echo "logic" > "$TASK_DIR/tier"
+
 jq -n --arg id "$TASK_ID" --arg now "$(date -Is)" \
   '{id:$id,status:"pending",attempts:0,assignee:"",branch:"",base:"",updated_at:$now}' > "$STATE"
 
 echo "已创建 $TASK_DIR"
-echo "下一步：填写 spec.md 和 allowed_paths（可选 accept.sh），提交后运行 scripts/agent/dispatch.sh $TASK_ID"
+echo "下一步：填写 spec.md、allowed_paths 和 tier（可选 accept.sh），提交后运行 scripts/agent/dispatch.sh $TASK_ID"

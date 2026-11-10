@@ -1,15 +1,30 @@
 #!/usr/bin/env bash
 # 把任务分发给 Codex：在独立 worktree 中非交互运行，输出落盘。
-# 用法: scripts/agent/dispatch.sh <task-id> [-m <model>]
+# 用法: scripts/agent/dispatch.sh <task-id> [-p <profile>] [-m <model>]
+# 模型默认按 scripts/agent/models.conf 和 tasks/<id>/tier 自动选择；给了 -m 或 -p 则完全按手动指定。
 # 若上次门禁失败，会自动把 gate.log 的失败输出附到 prompt 里。
 source "$(dirname "$0")/lib.sh"
+source "$(dirname "$0")/models.conf"
 task_init "${1:-}"; shift || true
 require_task
 
-MODEL_ARGS=()
-while getopts "m:" opt; do
-  case "$opt" in m) MODEL_ARGS=(-m "$OPTARG");; *) exit 2;; esac
+MANUAL_ARGS=()
+while getopts "m:p:" opt; do
+  case "$opt" in
+    m) MANUAL_ARGS+=(-m "$OPTARG");;
+    p) MANUAL_ARGS+=(-p "$OPTARG");;
+    *) exit 2;;
+  esac
 done
+
+TIER="$(tr -d '[:space:]' < "$TASK_DIR/tier" 2>/dev/null || true)"
+TIER="${TIER:-logic}"
+EFFORT_VAR="EFFORT_$TIER"
+[[ -n "${!EFFORT_VAR:-}" ]] || { echo "tasks/$TASK_ID/tier 的值无效: $TIER（应为 mechanical 或 logic）" >&2; exit 2; }
+EFFORT="${!EFFORT_VAR}"
+
+PRIMARY_ARGS=(-p "$PRIMARY_PROFILE" -m "$PRIMARY_MODEL" -c "model_reasoning_effort=$EFFORT")
+FALLBACK_ARGS=(-c "model_provider=$FALLBACK_PROVIDER" -m "$FALLBACK_MODEL" -c "model_reasoning_effort=$EFFORT")
 
 # 首次分发：从当前 HEAD 建 worktree。spec 和验收测试必须已提交，否则 worktree 里看不到。
 if [[ ! -d "$WT" ]]; then
@@ -37,9 +52,18 @@ PROMPT="$TASK_DIR/prompt.md"
 } > "$PROMPT"
 
 state_bump
-state_set status running assignee "codex"
 ATTEMPT="$(state_get attempts)"
-echo "[dispatch] $TASK_ID 第 $ATTEMPT 次，worktree=$WT"
+
+# 选模型：手动指定 > 第 N 次起用备选 > 主力
+if (( ${#MANUAL_ARGS[@]} )); then
+  MODEL_ARGS=("${MANUAL_ARGS[@]}"); MODEL_LABEL="manual: ${MANUAL_ARGS[*]}"; CAN_FALLBACK=0
+elif (( ATTEMPT >= FALLBACK_FROM_ATTEMPT )); then
+  MODEL_ARGS=("${FALLBACK_ARGS[@]}"); MODEL_LABEL="$FALLBACK_MODEL"; CAN_FALLBACK=0
+else
+  MODEL_ARGS=("${PRIMARY_ARGS[@]}"); MODEL_LABEL="$PRIMARY_MODEL"; CAN_FALLBACK=1
+fi
+state_set status running assignee "codex:$MODEL_LABEL" tier "$TIER"
+echo "[dispatch] $TASK_ID 第 $ATTEMPT 次，tier=$TIER effort=$EFFORT model=$MODEL_LABEL"
 
 # 下级的权限与工具（只作用于本次调用，不改 ~/.codex/config.toml）：
 # - 沙箱：只能写任务 worktree；放开网络，否则 flutter test 建不了本地 socket。
@@ -55,13 +79,27 @@ CODEX_ARGS=(
   -c mcp_servers.rea.enabled=false
 )
 
+run_codex() {
+  codex exec -C "$WT" "${CODEX_ARGS[@]}" "$@" \
+    -o "$TASK_DIR/worker-last.md" - < "$PROMPT" >> "$TASK_DIR/worker.log" 2>&1
+}
+
+: > "$TASK_DIR/worker.log"
+rm -f "$TASK_DIR/worker-last.md"
 set +e
-codex exec -C "$WT" "${CODEX_ARGS[@]}" "${MODEL_ARGS[@]}" \
-  -o "$TASK_DIR/worker-last.md" - < "$PROMPT" > "$TASK_DIR/worker.log" 2>&1
+run_codex "${MODEL_ARGS[@]}"
 RC=$?
+# 主力调用失败（限流、服务报错等）：同一次分发内改用备选，不增加尝试次数
+if (( RC != 0 && CAN_FALLBACK )); then
+  echo "[dispatch] $MODEL_LABEL 调用失败（退出码 $RC），改用备选 $FALLBACK_MODEL" | tee -a "$TASK_DIR/worker.log" >&2
+  MODEL_LABEL="$FALLBACK_MODEL (主力失败后接手)"
+  state_set assignee "codex:$MODEL_LABEL"
+  run_codex "${FALLBACK_ARGS[@]}"
+  RC=$?
+fi
 set -e
 
-commit_worktree "task/$TASK_ID: attempt $ATTEMPT (codex)"
+commit_worktree "task/$TASK_ID: attempt $ATTEMPT ($MODEL_LABEL)"
 
 if (( RC != 0 )); then
   state_set status worker_error
