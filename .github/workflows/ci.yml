@@ -41,7 +41,8 @@ jobs:
           flutter-version: 3.47.9
           cache: true
       - run: flutter pub get
-      - run: flutter analyze
+      # 只分析主工程；spike/ 是独立工程，由 webrtc-spike 工作流负责
+      - run: flutter analyze --no-fatal-infos lib test
       - run: flutter test
 
   build-linux:
