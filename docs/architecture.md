@@ -4,7 +4,7 @@
 
 ## 1. 总览
 - **客户端**：Flutter 桌面应用，首发 **Windows、Linux**；后续用同一代码库发布 **iOS、Android**。
-- **中继**：**Cloudflare Workers + Durable Objects**（`chat.tommydeng.org`），每会话一个 DO，仅负责 WebSocket 密文中继、WebRTC 信令和离线密文队列。**不使用 Cloudflare Pages，无 Web 前端。**
+- **中继**：**Cloudflare Workers + Durable Objects**（`whisper.tommydeng.org`），每会话一个 DO，仅负责 WebSocket 密文中继、WebRTC 信令和离线密文队列。**不使用 Cloudflare Pages，无 Web 前端。**
 - **加密**：客户端用 **libsodium**（`sodium_libs`）或 Dart `cryptography` 包。
 - **密钥存储**：系统安全存储，通过 `flutter_secure_storage`：Windows DPAPI / 凭据管理器，Linux libsecret（GNOME Keyring / KWallet）。
 - **语音**：`flutter_webrtc` P2P，DTLS-SRTP；**局域网优先**：物理局域网 → ZeroTier → 公网 STUN → Cloudflare TURN（免费额度内，MVP 启用）。
@@ -22,7 +22,7 @@ flowchart LR
     UB[UI] --> CB[libsodium]
     CB --> SB[(系统安全存储)]
   end
-  subgraph CF[Cloudflare 边缘 chat.tommydeng.org]
+  subgraph CF[Cloudflare 边缘 whisper.tommydeng.org]
     W[Worker 路由]
     DO[Durable Object 每会话一个<br/>WS 中继 + 信令 + 离线密文队列]
   end
