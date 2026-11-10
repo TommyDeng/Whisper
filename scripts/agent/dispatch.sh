@@ -80,7 +80,8 @@ CODEX_ARGS=(
 )
 
 run_codex() {
-  codex exec -C "$WT" "${CODEX_ARGS[@]}" "$@" \
+  # 超时退出码为 124，与调用失败同样处理：主力卡住不返回时由备选接手
+  timeout "$WORKER_TIMEOUT" codex exec -C "$WT" "${CODEX_ARGS[@]}" "$@" \
     -o "$TASK_DIR/worker-last.md" - < "$PROMPT" >> "$TASK_DIR/worker.log" 2>&1
 }
 
