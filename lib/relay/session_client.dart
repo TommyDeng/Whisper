@@ -374,6 +374,7 @@ class SessionClient {
 
   void _handleError(Map<String, dynamic> json) {
     final code = json['error'];
+    if (code is! String) return;
     final id = json['id'];
     _errorsController.add(RelayError(code, id is String ? id : null));
 
@@ -401,19 +402,20 @@ class SessionClient {
   // Private: ordered inbound message processing
   // =========================================================================
 
-  final List<IncomingRelayMessage> _messageQueue = [];
+  /// 每条消息记着它是从哪一条连接（generation）收到的，ack 只发回那条连接。
+  final List<(IncomingRelayMessage, int)> _messageQueue = [];
   bool _processingMessage = false;
 
   void _enqueueMessage(IncomingRelayMessage message, int generation) {
-    _messageQueue.add(message);
-    _drainMessageQueue(generation);
+    _messageQueue.add((message, generation));
+    _drainMessageQueue();
   }
 
-  void _drainMessageQueue(int generation) {
+  void _drainMessageQueue() {
     if (_processingMessage || _messageQueue.isEmpty) return;
 
     _processingMessage = true;
-    final message = _messageQueue.removeAt(0);
+    final (message, generation) = _messageQueue.removeAt(0);
 
     Future<void> result;
     try {
@@ -427,10 +429,10 @@ class SessionClient {
       if (_connectionActive && generation == _connectionGeneration) {
         _sendFrame({'type': 'ack', 'id': message.id});
       }
-      _drainMessageQueue(generation);
+      _drainMessageQueue();
     }, onError: (_) {
       _processingMessage = false;
-      _drainMessageQueue(generation);
+      _drainMessageQueue();
     }));
   }
 

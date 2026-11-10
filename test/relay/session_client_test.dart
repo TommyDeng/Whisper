@@ -436,6 +436,57 @@ void main() {
         async.flushMicrotasks();
       });
     });
+    test('旧连接的消息还在处理时重连：新连接上收到的消息照常 ack', () {
+      fakeAsync((async) {
+        final relay = FakeRelay();
+        final gate = Completer<void>();
+        final client = _client(relay, onMessage: (m) {
+          return m.id == 'slow' ? gate.future : Future<void>.value();
+        });
+        final first = _connect(async, relay, client);
+
+        first.push({'type': 'msg', 'id': 'slow', 'payload': 'a', 'ts': 1});
+        async.flushMicrotasks();
+        first.drop();
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 1));
+        final second = relay.last;
+        second.push(_welcome());
+        second.push({'type': 'msg', 'id': 'next', 'payload': 'b', 'ts': 2});
+        async.flushMicrotasks();
+        expect(second.sentOfType('ack'), isEmpty);
+
+        gate.complete();
+        async.flushMicrotasks();
+        expect(first.sentOfType('ack'), isEmpty);
+        expect(second.sentOfType('ack').map((f) => f['id']), ['next']);
+
+        client.stop();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('error 字段不是字符串的 error 帧被忽略', () {
+      fakeAsync((async) {
+        final relay = FakeRelay();
+        final client = _client(relay);
+        final errors = _collect(client.errors);
+        final connection = _connect(async, relay, client);
+        client.send('m1', 'one');
+
+        connection.push({'type': 'error', 'error': 42, 'id': 'm1'});
+        connection.push({'type': 'error', 'id': 'm1'});
+        connection.push({'type': 'error', 'error': 'queue-full', 'id': 'm1'});
+        async.flushMicrotasks();
+
+        expect(errors, const [RelayError('queue-full', 'm1')]);
+        expect(client.pendingIds, ['m1']);
+        expect(client.state, SessionLinkState.connected);
+
+        client.stop();
+        async.flushMicrotasks();
+      });
+    });
   });
 
   group('重连', () {
