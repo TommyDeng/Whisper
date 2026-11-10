@@ -6,7 +6,7 @@
 /// 3. 邀请人收到配对请求，显示对方安全码，手动批准/拒绝
 /// 4. 批准后建立会话，交换安全码
 
-library pairing;
+library;
 
 export 'invitation_code.dart';
 export 'pairing_manager.dart';

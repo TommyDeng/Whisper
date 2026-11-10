@@ -31,8 +31,8 @@ void main() {
     expect(roomCodePattern.hasMatch(code), isTrue);
   });
 
-  test('peer connection config leaves DTLS on and parses fingerprints', () {
-    final config = buildPeerConnectionConfig();
+  test('peer connection config leaves DTLS on and parses fingerprints', () async {
+    final config = await buildPeerConnectionConfig();
     expect(configLeavesDtlsEnabled(config), isTrue);
     expect(config.containsKey('DtlsSrtpKeyAgreement'), isFalse);
     expect(config['iceServers'], [

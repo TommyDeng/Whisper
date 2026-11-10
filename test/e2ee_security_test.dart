@@ -1,20 +1,19 @@
-/// 耳语 E2EE 安全测试。
-///
-/// 测试覆盖：
-/// - XChaCha20-Poly1305 加解密往返
-/// - 身份密钥生成
-/// - 安全码计算与验证
-/// - 文件分块加密与重传
+// 耳语 E2EE 安全测试。
+//
+// 测试覆盖：
+// - XChaCha20-Poly1305 加解密往返
+// - 身份密钥生成
+// - 安全码计算与验证
+// - 文件分块加密与重传
 
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cryptography/cryptography.dart';
 
-import '../lib/e2ee/crypto.dart';
-import '../lib/identity/identity.dart';
-import '../lib/identity/safety_code.dart';
-import '../lib/transfer/frames.dart';
+import 'package:whisper/e2ee/crypto.dart';
+import 'package:whisper/identity/identity.dart';
+import 'package:whisper/transfer/frames.dart';
 
 void main() {
   group('E2EE 加解密测试', () {
