@@ -6,7 +6,7 @@
 /// 注意：Flutter 桌面端 mDNS 原生支持有限，本实现使用 UDP 广播，
 /// 适用于同一子网内的设备发现。
 
-library lan_discovery;
+library;
 
 import 'dart:async';
 import 'dart:convert';
