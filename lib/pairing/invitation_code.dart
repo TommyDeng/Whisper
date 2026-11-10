@@ -2,7 +2,7 @@
 ///
 /// 邀请码格式（Base32 编码）：
 ///   version(1 byte) + publicKey(32 bytes) + token(16 bytes) + expiry(4 bytes)
-///   总计 53 字节 -> Base32 约 88 字符
+///   总计 53 字节 -> Base32 85 字符
 ///
 /// 邀请码特性：
 /// - 一次性：使用后立即失效
@@ -32,6 +32,16 @@ class InvitationCode {
 
   /// Base32 编码的邀请码字符串（可复制粘贴）。
   String encode() {
+    if (publicKey.length != 32) {
+      throw ArgumentError('publicKey 必须为 32 字节');
+    }
+    if (token.length != 16) {
+      throw ArgumentError('token 必须为 16 字节');
+    }
+    if (expiry < 0 || expiry > 0xFFFFFFFF) {
+      throw ArgumentError('expiry 必须在 0..0xFFFFFFFF 范围内');
+    }
+
     final bytes = <int>[];
     bytes.add(1); // version
     bytes.addAll(publicKey);
@@ -42,22 +52,46 @@ class InvitationCode {
 
   /// 从 Base32 字符串解析邀请码。
   static InvitationCode? decode(String code) {
-    try {
-      final bytes = _Base32.decode(code);
-      if (bytes.length != 53 || bytes[0] != 1) return null;
-
-      final publicKey = Uint8List.fromList(bytes.sublist(1, 33));
-      final token = Uint8List.fromList(bytes.sublist(33, 49));
-      final expiry = _bytesToInt32(bytes.sublist(49, 53));
-
-      return InvitationCode(
-        publicKey: publicKey,
-        token: token,
-        expiry: expiry,
-      );
-    } catch (_) {
-      return null;
+    // 去掉允许的分隔符：空白字符（空格、制表符、回车、换行）和连字符
+    final cleaned = StringBuffer();
+    for (var i = 0; i < code.length; i++) {
+      final ch = code[i];
+      if (ch == '-' || ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') {
+        continue;
+      }
+      cleaned.writeCharCode(ch.codeUnitAt(0));
     }
+    final s = cleaned.toString();
+
+    // 去掉分隔符后必须恰好 85 个字符
+    if (s.length != 85) return null;
+
+    // 忽略大小写，且所有字符必须在字母表内
+    final upper = s.toUpperCase();
+    for (var i = 0; i < upper.length; i++) {
+      if (_Base32._alphabet.indexOf(upper[i]) == -1) return null;
+    }
+
+    // 最后一个字符的补位（最低位）必须为 0
+    final lastIndex = _Base32._alphabet.indexOf(upper[84]);
+    if (lastIndex.isOdd) return null;
+
+    // Base32 解码
+    final bytes = _Base32.decode(upper);
+    if (bytes == null || bytes.length != 53) return null;
+
+    // 版本号必须为 1
+    if (bytes[0] != 1) return null;
+
+    final publicKey = Uint8List.fromList(bytes.sublist(1, 33));
+    final token = Uint8List.fromList(bytes.sublist(33, 49));
+    final expiry = _bytesToInt32(bytes.sublist(49, 53));
+
+    return InvitationCode(
+      publicKey: publicKey,
+      token: token,
+      expiry: expiry,
+    );
   }
 
   /// 邀请码是否已过期。
@@ -68,6 +102,9 @@ class InvitationCode {
 
   /// 生成新的邀请码（24 小时有效）。
   static InvitationCode create(Uint8List publicKey) {
+    if (publicKey.length != 32) {
+      throw ArgumentError('publicKey 必须为 32 字节');
+    }
     final token = Uint8List.fromList(
       List.generate(16, (_) => Random.secure().nextInt(256)),
     );
@@ -118,13 +155,13 @@ class _Base32 {
     return result.toString();
   }
 
-  static List<int> decode(String encoded) {
+  static List<int>? decode(String encoded) {
     final bytes = <int>[];
     var bits = 0;
     var value = 0;
-    for (final ch in encoded.toUpperCase().codeUnits) {
+    for (final ch in encoded.codeUnits) {
       final index = _alphabet.indexOf(String.fromCharCode(ch));
-      if (index == -1) continue; // skip invalid chars
+      if (index == -1) return null;
       value = (value << 5) | index;
       bits += 5;
       if (bits >= 8) {
