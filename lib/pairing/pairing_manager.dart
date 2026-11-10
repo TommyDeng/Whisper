@@ -1,204 +1,331 @@
-/// 配对管理器：处理邀请码生成、解析、配对请求、手动批准。
+/// 配对管理器：应用里所有进行中的配对（自己发出的邀请、自己正在加入的邀请）。
 ///
-/// 配对状态机：
-///   idle -> generating (生成邀请码) -> waiting (等待对方加入)
-///   idle -> entering (输入邀请码) -> requesting (发送配对请求)
-///   waiting/requesting -> approving (等待邀请人批准) -> approved (会话建立)
-///   任何阶段 -> failed (失败)
+/// 邀请和加入请求都会存到本地，重启后接着等；批准必须由用户手动点。
+library;
 
 import 'dart:async';
 import 'dart:convert';
 
+import '../contact/contact_model.dart';
 import '../identity/identity.dart';
+import '../relay/relay_transport.dart';
+import '../storage/pending_invite_store.dart';
 import 'invitation_code.dart';
+import 'pairing_flow.dart';
 
-/// 配对状态。
-enum PairingState {
-  idle,
-  generating,
-  waiting,
-  entering,
-  requesting,
-  approving,
-  approved,
+/// 等用户批准的一条配对请求。
+class IncomingPairRequest {
+  const IncomingPairRequest({
+    required this.inviteId,
+    required this.name,
+    required this.safetyCode,
+  });
+
+  final String inviteId;
+
+  /// 对方自报的称呼，可能为空。
+  final String name;
+  final String safetyCode;
+}
+
+/// 自己正在加入的一个邀请。
+class OutgoingJoin {
+  const OutgoingJoin({required this.inviteId, required this.status});
+
+  final String inviteId;
+  final PairingStatus status;
+}
+
+enum PairingNoticeKind {
+  /// 配对完成，联系人已保存。
+  contactAdded,
+
+  /// 对方拒绝了我们的加入请求。
+  declinedByPeer,
+
+  /// 配对失败。
   failed,
 }
 
-/// 配对请求（信令传输）。
-class PairingRequest {
-  const PairingRequest({
-    required this.requestId,
-    required this.inviterPublicKey,
-    required this.inviteePublicKey,
-    required this.timestamp,
-  });
+/// 一次配对的结果，给界面弹提示用。
+class PairingNotice {
+  const PairingNotice(this.kind, {required this.asInviter, this.contact, this.failure});
 
-  final String requestId;
-  final String inviterPublicKey;
-  final String? inviteePublicKey; // null 表示对方尚未发送自己的公钥
-  final int timestamp;
-
-  Map<String, dynamic> toJson() => {
-    'requestId': requestId,
-    'inviterPublicKey': inviterPublicKey,
-    if (inviteePublicKey != null) 'inviteePublicKey': inviteePublicKey,
-    'timestamp': timestamp,
-  };
-
-  static PairingRequest fromJson(Map<String, dynamic> json) => PairingRequest(
-    requestId: json['requestId'] as String,
-    inviterPublicKey: json['inviterPublicKey'] as String,
-    inviteePublicKey: json['inviteePublicKey'] as String?,
-    timestamp: json['timestamp'] as int,
-  );
+  final PairingNoticeKind kind;
+  final bool asInviter;
+  final Contact? contact;
+  final PairingFailure? failure;
 }
 
-/// 配对结果。
-class PairingResult {
-  const PairingResult({
-    required this.success,
-    required this.sessionId,
-    required this.peerPublicKey,
-    required this.safetyCode,
-    this.error,
-  });
+/// [PairingManager.join] 没能开始的原因。
+enum JoinError { invalidCode, expired, ownInvitation, alreadyJoining }
 
-  final bool success;
-  final String sessionId;
-  final String peerPublicKey;
-  final String safetyCode;
-  final String? error;
-}
-
-/// 配对管理器。
 class PairingManager {
-  PairingManager({required this.identityManager});
+  PairingManager({
+    required this.baseUri,
+    required this.connector,
+    required this.identityManager,
+    required this.myName,
+    required this.onContact,
+  });
 
+  final Uri baseUri;
+  final RelayConnector connector;
   final IdentityManager identityManager;
 
-  PairingState _state = PairingState.idle;
-  String? _sessionId;
-  String? _peerPublicKey;
-  String? _safetyCode;
-  String? _error;
-  InvitationCode? _myInvitation;
-  PairingRequest? _incomingRequest;
+  /// 告诉对方的称呼。
+  final Future<String> Function() myName;
 
-  StreamController<PairingState>? _stateController;
-  StreamController<PairingRequest?>? _requestController;
+  /// 保存新联系人（并开始收发消息）。
+  final Future<void> Function(Contact contact) onContact;
 
-  PairingState get state => _state;
-  String? get sessionId => _sessionId;
-  String? get peerPublicKey => _peerPublicKey;
-  String? get safetyCode => _safetyCode;
-  String? get error => _error;
-  InvitationCode? get myInvitation => _myInvitation;
-  PairingRequest? get incomingRequest => _incomingRequest;
+  final Map<String, InviterPairing> _inviters = {};
+  final Map<String, JoinerPairing> _joiners = {};
+  final _changes = StreamController<void>.broadcast();
+  final _notices = StreamController<PairingNotice>.broadcast();
+  Future<InvitationCode>? _creating;
+  bool _disposed = false;
 
-  Stream<PairingState> get stateStream {
-    _stateController ??= StreamController<PairingState>.broadcast();
-    return _stateController!.stream;
-  }
+  /// 任何一个配对的状态变了（广播流）。
+  Stream<void> get changes => _changes.stream;
 
-  Stream<PairingRequest?> get requestStream {
-    _requestController ??= StreamController<PairingRequest?>.broadcast();
-    return _requestController!.stream;
-  }
+  /// 配对结果（广播流）。
+  Stream<PairingNotice> get notices => _notices.stream;
 
-  /// 生成邀请码（作为邀请方）。
-  Future<InvitationCode> generateInvitation() async {
-    _setState(PairingState.generating);
+  /// 恢复上次没走完的邀请。
+  Future<void> start() async {
     final identity = await identityManager.identity;
-    _myInvitation = InvitationCode.create(identity.x25519PublicKey);
-    _setState(PairingState.waiting);
-    return _myInvitation!;
+    for (final pending in await PendingInviteStore.loadActive()) {
+      final invitation = InvitationCode.decode(pending.code);
+      if (invitation == null || invitation.isExpired) {
+        await PendingInviteStore.remove(pending.inviteId);
+        continue;
+      }
+      if (pending.role == 'inviter') {
+        _startInviter(identity, invitation);
+      } else {
+        _startJoiner(identity, invitation);
+      }
+    }
+    _notifyChanged();
   }
 
-  /// 解析并使用邀请码（作为被邀请方）。
-  Future<PairingResult> useInvitation(String code, {String? sessionId}) async {
-    _setState(PairingState.entering);
-    final invitation = InvitationCode.decode(code);
-    if (invitation == null) {
-      _setError('邀请码格式无效');
-      return const PairingResult(
-        success: false,
-        sessionId: '',
-        peerPublicKey: '',
-        safetyCode: '',
-        error: '邀请码格式无效',
-      );
+  /// 当前还能给别人用的邀请码（还没人请求、未过期），没有则为 null。
+  InvitationCode? get openInvitation {
+    for (final flow in _inviters.values) {
+      final open = flow.status == PairingStatus.connecting || flow.status == PairingStatus.waiting;
+      if (open && flow.invitation.ttl > 60) return flow.invitation;
     }
-    if (invitation.isExpired) {
-      _setError('邀请码已过期');
-      return const PairingResult(
-        success: false,
-        sessionId: '',
-        peerPublicKey: '',
-        safetyCode: '',
-        error: '邀请码已过期',
-      );
-    }
+    return null;
+  }
 
+  /// 该邀请此刻是否已在中继上登记好（对方现在加入能找到它）。
+  bool isRegistered(InvitationCode invitation) =>
+      _inviters[invitation.inviteId]?.status == PairingStatus.waiting;
+
+  /// 取一个可用的邀请码：有现成的就复用，否则新建并向中继登记。
+  Future<InvitationCode> ensureInvitation() {
+    final existing = openInvitation;
+    if (existing != null) return Future.value(existing);
+    return _creating ??= _createInvitation().whenComplete(() => _creating = null);
+  }
+
+  Future<InvitationCode> _createInvitation() async {
     final identity = await identityManager.identity;
-    _incomingRequest = PairingRequest(
-      requestId: invitation.requestId,
-      inviterPublicKey: base64Url.encode(invitation.publicKey),
-      inviteePublicKey: identity.x25519PublicKeyBase64,
-      timestamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    );
-    _setState(PairingState.requesting);
-
-    // 这里应通过信令发送配对请求，实际实现需整合 WebSocket
-    // 暂时模拟：等待邀请人批准
-    _setState(PairingState.approving);
-
-    return const PairingResult(
-      success: true,
-      sessionId: '',
-      peerPublicKey: '',
-      safetyCode: '',
-    );
+    final invitation = InvitationCode.create(identity.x25519PublicKey);
+    await PendingInviteStore.save(PendingInvite(
+      inviteId: invitation.inviteId,
+      role: 'inviter',
+      code: invitation.encode(),
+      expiry: invitation.expiry,
+    ));
+    _startInviter(identity, invitation);
+    _notifyChanged();
+    return invitation;
   }
 
-  /// 邀请方批准配对请求。
-  Future<bool> approveRequest(String requestId) async {
-    if (_incomingRequest?.requestId != requestId) {
-      return false;
+  /// 等用户处理的配对请求。
+  List<IncomingPairRequest> get incomingRequests => [
+        for (final entry in _inviters.entries)
+          if (entry.value.status == PairingStatus.requestReceived)
+            IncomingPairRequest(
+              inviteId: entry.key,
+              name: entry.value.requester?.name ?? '',
+              safetyCode: entry.value.safetyCode ?? '',
+            ),
+      ];
+
+  Future<void> approve(String inviteId) async => _inviters[inviteId]?.approve();
+
+  void reject(String inviteId) => _inviters[inviteId]?.reject();
+
+  /// 自己正在加入、还没有结果的邀请。
+  List<OutgoingJoin> get joins => [
+        for (final entry in _joiners.entries)
+          OutgoingJoin(inviteId: entry.key, status: entry.value.status),
+      ];
+
+  /// 用对方的邀请码发起配对。返回 null 表示已经开始，结果通过 [notices] 给出。
+  Future<JoinError?> join(String code) async {
+    final invitation = InvitationCode.decode(code.trim());
+    if (invitation == null) return JoinError.invalidCode;
+    if (invitation.isExpired) return JoinError.expired;
+    if (_joiners.containsKey(invitation.inviteId)) return JoinError.alreadyJoining;
+    final identity = await identityManager.identity;
+    if (base64Url.encode(invitation.publicKey) == identity.x25519PublicKeyBase64) {
+      return JoinError.ownInvitation;
     }
-    _setState(PairingState.approved);
-    return true;
+    await PendingInviteStore.save(PendingInvite(
+      inviteId: invitation.inviteId,
+      role: 'joiner',
+      code: invitation.encode(),
+      expiry: invitation.expiry,
+    ));
+    _startJoiner(identity, invitation);
+    _notifyChanged();
+    return null;
   }
 
-  /// 拒绝配对请求。
-  Future<void> rejectRequest(String requestId) async {
-    if (_incomingRequest?.requestId != requestId) return;
-    _setState(PairingState.idle);
-    _incomingRequest = null;
+  /// 放弃一个正在加入的邀请。
+  Future<void> cancelJoin(String inviteId) async => _joiners[inviteId]?.cancel();
+
+  void _startInviter(IdentityKeyPair identity, InvitationCode invitation) {
+    final inviteId = invitation.inviteId;
+    if (_disposed || _inviters.containsKey(inviteId)) return;
+    Contact? saved;
+    final flow = InviterPairing(
+      baseUri: baseUri,
+      connector: connector,
+      identity: identity,
+      invitation: invitation,
+      myName: myName,
+      onPaired: (peer) async {
+        saved = _contactFor(identity, peer);
+        await onContact(saved!);
+      },
+    );
+    _inviters[inviteId] = flow;
+    _track(flow, inviteId, asInviter: true, contact: () => saved, flows: _inviters);
   }
 
-  /// 取消配对。
-  Future<void> cancel() async {
-    _setState(PairingState.idle);
-    _myInvitation = null;
-    _incomingRequest = null;
-    _sessionId = null;
-    _peerPublicKey = null;
-    _safetyCode = null;
-    _error = null;
+  void _startJoiner(IdentityKeyPair identity, InvitationCode invitation) {
+    final inviteId = invitation.inviteId;
+    if (_disposed || _joiners.containsKey(inviteId)) return;
+    Contact? saved;
+    final flow = JoinerPairing(
+      baseUri: baseUri,
+      connector: connector,
+      identity: identity,
+      invitation: invitation,
+      myName: myName,
+      onPaired: (peer) async {
+        saved = _contactFor(identity, peer);
+        await onContact(saved!);
+      },
+    );
+    _joiners[inviteId] = flow;
+    _track(flow, inviteId, asInviter: false, contact: () => saved, flows: _joiners);
   }
 
-  void _setState(PairingState state) {
-    _state = state;
-    _stateController?.add(state);
+  void _track(
+    PairingFlow flow,
+    String inviteId, {
+    required bool asInviter,
+    required Contact? Function() contact,
+    required Map<String, PairingFlow> flows,
+  }) {
+    flow.statuses.listen((_) => _notifyChanged());
+    unawaited(flow.finished.then((status) async {
+      flows.remove(inviteId);
+      final failure = flow.failure;
+      // 应用退出、或被另一个实例顶掉时保留记录，下次启动接着等；其它结局都是终局
+      final keep = _disposed || (failure == PairingFailure.replaced);
+      if (!keep) {
+        try {
+          await PendingInviteStore.remove(inviteId);
+        } catch (_) {
+          // 删不掉也没关系：过期后会被清理
+        }
+      }
+      if (_disposed) return;
+      switch (status) {
+        case PairingStatus.done:
+          _notices.add(PairingNotice(
+            PairingNoticeKind.contactAdded,
+            asInviter: asInviter,
+            contact: contact(),
+          ));
+        case PairingStatus.rejected:
+          // 邀请人自己点的拒绝不需要再提示
+          if (!asInviter) {
+            _notices.add(const PairingNotice(PairingNoticeKind.declinedByPeer, asInviter: false));
+          }
+        default:
+          if (failure != PairingFailure.cancelled) {
+            _notices.add(PairingNotice(
+              PairingNoticeKind.failed,
+              asInviter: asInviter,
+              failure: failure,
+            ));
+          }
+      }
+      _notifyChanged();
+    }));
+    flow.start();
   }
 
-  void _setError(String message) {
-    _error = message;
-    _setState(PairingState.failed);
+  Contact _contactFor(IdentityKeyPair identity, PairedPeer peer) {
+    final publicKey = base64Url.encode(peer.profile.x25519PublicKey);
+    final name = peer.profile.name.trim();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return Contact(
+      deviceId: publicKey,
+      name: name.isEmpty ? '新联系人' : name,
+      x25519PublicKeyBase64: publicKey,
+      ed25519PublicKeyBase64: base64Url.encode(peer.profile.ed25519PublicKey),
+      safetyCode: SafetyCode.compute(identity.x25519PublicKeyBase64, publicKey),
+      isVerified: false,
+      createdAt: now,
+      lastMessageTime: now,
+      sessionId: peer.sessionId,
+      peerRole: peer.myRole,
+    );
   }
 
-  void dispose() {
-    _stateController?.close();
-    _requestController?.close();
+  void _notifyChanged() {
+    if (!_disposed) _changes.add(null);
+  }
+
+  /// 断开所有配对连接。本地保存的邀请保留，下次 [start] 时恢复。
+  Future<void> dispose() async {
+    _disposed = true;
+    final flows = [..._inviters.values.map((f) => f.cancel()), ..._joiners.values.map((f) => f.cancel())];
+    await Future.wait(flows);
+    await _changes.close();
+    await _notices.close();
+  }
+}
+
+/// 把失败原因翻译成给用户看的话。
+String describePairingFailure(PairingFailure? failure, {required bool asInviter}) {
+  switch (failure) {
+    case PairingFailure.notFound:
+      return '找不到这个邀请。请确认对方的应用开着，并且邀请码没有抄错。';
+    case PairingFailure.expired:
+      return '邀请已过期。';
+    case PairingFailure.used:
+      return asInviter ? '这个邀请已经失效，请重新生成。' : '这个邀请已经被使用过了。';
+    case PairingFailure.forbidden:
+      return '这个邀请不属于当前身份。';
+    case PairingFailure.replaced:
+      return '同一个身份在别处也打开了这个邀请。';
+    case PairingFailure.invalidRequest:
+      return '收到的配对请求无法识别，已自动拒绝。';
+    case PairingFailure.invalidResponse:
+      return '对方的应答无法验证，配对已中止。';
+    case PairingFailure.cancelled:
+      return '已取消。';
+    case null:
+      return '配对失败。';
   }
 }

@@ -2,50 +2,14 @@
 ///
 /// 基于 SQLite 存储已配对的亲友身份。
 
-import 'package:path/path.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
+
 import '../contact/contact_model.dart';
+import '../storage/app_database.dart';
 
-/// 联系人数据库管理器（单例）
+/// 联系人表的读写。数据库本身由 [AppDatabase] 打开和建表。
 class ContactStore {
-  static Database? _db;
-
-  static Future<Database> get database async {
-    if (_db != null) return _db!;
-    _db = await _initDb();
-    return _db!;
-  }
-
-  static Future<Database> _initDb() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final dbPath = join(docsDir.path, 'whisper.db');
-    return await openDatabase(
-      dbPath,
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE contacts (
-            deviceId TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            x25519PublicKeyBase64 TEXT NOT NULL,
-            ed25519PublicKeyBase64 TEXT NOT NULL,
-            safetyCode TEXT NOT NULL,
-            isVerified INTEGER NOT NULL DEFAULT 0,
-            createdAt INTEGER NOT NULL,
-            lastMessageTime INTEGER NOT NULL DEFAULT 0
-          )
-        ''');
-        await db.execute('''
-          CREATE INDEX idx_contacts_name ON contacts(name);
-          CREATE INDEX idx_contacts_lastMessageTime ON contacts(lastMessageTime);
-        ''');
-      },
-      onUpgrade: (db, oldVersion, newVersion) async {
-        // 未来版本升级时在此处理
-      },
-    );
-  }
+  static Future<Database> get database => AppDatabase.database;
 
   /// 插入或更新联系人
   static Future<void> upsertContact(Contact contact) async {
@@ -124,11 +88,5 @@ class ContactStore {
   }
 
   /// 关闭数据库
-  static Future<void> close() async {
-    final db = _db;
-    if (db != null) {
-      await db.close();
-      _db = null;
-    }
-  }
+  static Future<void> close() => AppDatabase.close();
 }

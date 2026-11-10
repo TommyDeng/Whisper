@@ -13,6 +13,8 @@ class Contact {
     required this.isVerified,
     required this.createdAt,
     required this.lastMessageTime,
+    this.sessionId = '',
+    this.peerRole = '',
   });
 
   /// 设备唯一标识（公钥哈希）
@@ -39,6 +41,18 @@ class Contact {
   /// 最后消息时间戳（Unix 毫秒）
   final int lastMessageTime;
 
+  /// 与这位联系人的中继会话 ID（配对时由邀请人生成）。空串表示还没有会话。
+  final String sessionId;
+
+  /// 自己在这个会话里的身份：`a`（当初的邀请人）或 `b`（加入者）。
+  final String peerRole;
+
+  /// 对方在这个会话里的身份。
+  String get remoteRole => peerRole == 'a' ? 'b' : 'a';
+
+  /// 是否可以收发消息。
+  bool get hasSession => sessionId.isNotEmpty && (peerRole == 'a' || peerRole == 'b');
+
   Contact copyWith({
     String? name,
     bool? isVerified,
@@ -53,6 +67,8 @@ class Contact {
       isVerified: isVerified ?? this.isVerified,
       createdAt: createdAt,
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
+      sessionId: sessionId,
+      peerRole: peerRole,
     );
   }
 
@@ -66,6 +82,8 @@ class Contact {
       'isVerified': isVerified ? 1 : 0,
       'createdAt': createdAt,
       'lastMessageTime': lastMessageTime,
+      'sessionId': sessionId,
+      'peerRole': peerRole,
     };
   }
 
@@ -79,6 +97,8 @@ class Contact {
       isVerified: (map['isVerified'] as int) == 1,
       createdAt: map['createdAt'] as int,
       lastMessageTime: map['lastMessageTime'] as int,
+      sessionId: map['sessionId'] as String? ?? '',
+      peerRole: map['peerRole'] as String? ?? '',
     );
   }
 

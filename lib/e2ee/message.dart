@@ -25,6 +25,7 @@ class StoredMessage {
     this.read = false,
     this.burnAfterRead = false,
     this.readAt,
+    this.relayed = false,
   });
 
   final String msgId;
@@ -39,6 +40,9 @@ class StoredMessage {
   final bool burnAfterRead;
   final int? readAt;
 
+  /// 自己发出的消息是否已被中继收下（`stored`）。
+  final bool relayed;
+
   /// 转换为数据库 Map
   Map<String, dynamic> toMap() => {
     'msgId': msgId,
@@ -52,6 +56,7 @@ class StoredMessage {
     'read': read ? 1 : 0,
     'burnAfterRead': burnAfterRead ? 1 : 0,
     'readAt': readAt,
+    'relayed': relayed ? 1 : 0,
   };
 
   /// 从数据库 Map 反序列化
@@ -67,6 +72,7 @@ class StoredMessage {
     read: (map['read'] as int) == 1,
     burnAfterRead: (map['burnAfterRead'] as int) == 1,
     readAt: map['readAt'] as int?,
+    relayed: (map['relayed'] as int? ?? 0) == 1,
   );
 }
 

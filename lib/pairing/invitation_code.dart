@@ -116,8 +116,11 @@ class InvitationCode {
     );
   }
 
-  /// 邀请码用于配对请求的标识（token 的 Base64 编码，用于信令）。
-  String get requestId => base64Url.encode(token);
+  /// 中继上的邀请 ID：token 的 base64url，不带填充（22 个字符）。
+  String get inviteId => base64Url.encode(token).replaceAll('=', '');
+
+  /// 同 [inviteId]。旧名字，保留给已有调用方。
+  String get requestId => inviteId;
 }
 
 int _bytesToInt32(List<int> bytes) {
