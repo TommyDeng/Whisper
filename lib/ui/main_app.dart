@@ -49,32 +49,8 @@ class _WhisperAppState extends State<WhisperApp> {
       title: '耳语 Whisper',
       theme: AppTheme.light,
       home: Scaffold(
-        appBar: AppBar(
-          title: Text(
-            _titles[_selectedIndex],
-            style: const TextStyle(
-              color: AppTheme.black,
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          centerTitle: false,
-          elevation: 0,
-          backgroundColor: AppTheme.white,
-          leading: const Padding(
-            padding: EdgeInsets.all(8),
-            child: Icon(Icons.menu, size: 20),
-          ),
-          actions: [
-            Padding(
-              padding: const EdgeInsets.all(8),
-              child: Icon(
-                _selectedIndex == 0 ? Icons.person_add : Icons.search,
-                size: 20,
-              ),
-            ),
-          ],
-        ),
+        // 联系人页和通话页自带标题栏，这里只给没有标题栏的页面补一个
+        appBar: _selectedIndex == 1 ? AppBar(title: Text(_titles[_selectedIndex])) : null,
         body: _screens[_selectedIndex],
         bottomNavigationBar: _buildBottomNavigation(),
       ),
