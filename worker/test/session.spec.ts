@@ -282,6 +282,18 @@ describe("session relay", () => {
     a.close();
   });
 
+  it("counts malformed frames toward the rate limit", async () => {
+    const a = await session(randomId(), "a");
+    await a.next();
+    for (let i = 0; i < RATE_LIMIT_MAX_FRAMES; i += 1) a.send(i % 2 === 0 ? "{" : { type: "nope" });
+    a.send({ type: "ping" });
+    for (let i = 0; i < RATE_LIMIT_MAX_FRAMES; i += 1) {
+      expect(await a.next()).toMatchObject({ type: "error", error: i % 2 === 0 ? "invalid-json" : "unknown-type" });
+    }
+    expect(await a.next()).toEqual({ type: "error", error: "rate-limited" });
+    a.close();
+  });
+
   it("drops expired messages when a peer connects", async () => {
     const id = randomId();
     const stub = stubOf(id);

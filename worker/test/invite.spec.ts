@@ -2,7 +2,7 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { MAX_PAIR_PAYLOAD_CHARS } from "../src/relay_limits";
+import { MAX_PAIR_PAYLOAD_CHARS, RATE_LIMIT_MAX_FRAMES } from "../src/relay_limits";
 import { type Client, connect, randomId, request } from "./helpers";
 
 type Role = "inviter" | "joiner";
@@ -259,6 +259,17 @@ describe("pairing flow", () => {
     expect(await inviter.next()).toEqual({ type: "error", error: "expected-object" });
     inviter.send({ type: "nope" });
     expect(await inviter.next()).toEqual({ type: "error", error: "unknown-type" });
+    inviter.close();
+  });
+
+  it("counts malformed frames toward the rate limit", async () => {
+    const inviter = await register(randomId(), randomId());
+    for (let i = 0; i < RATE_LIMIT_MAX_FRAMES; i += 1) inviter.send(i % 2 === 0 ? "{" : { type: "nope" });
+    inviter.send({ type: "ping" });
+    for (let i = 0; i < RATE_LIMIT_MAX_FRAMES; i += 1) {
+      expect(await inviter.next()).toMatchObject({ type: "error", error: i % 2 === 0 ? "invalid-json" : "unknown-type" });
+    }
+    expect(await inviter.next()).toEqual({ type: "error", error: "rate-limited" });
     inviter.close();
   });
 });

@@ -136,6 +136,11 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    // 每一帧都计入限速，包括格式错误的帧。
+    if (!allowFrame(ws)) {
+      sendJson(ws, { type: "error", error: "rate-limited" });
+      return;
+    }
     if (typeof message !== "string") {
       sendJson(ws, { type: "error", error: "invalid-json" });
       return;
@@ -164,10 +169,6 @@ export class SessionDO extends DurableObject<Env> {
       return;
     }
 
-    if (!allowFrame(ws)) {
-      sendJson(ws, { type: "error", error: "rate-limited" });
-      return;
-    }
 
     if (type === "ping") {
       sendJson(ws, { type: "pong" });
