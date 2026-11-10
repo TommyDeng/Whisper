@@ -25,6 +25,23 @@ class AppTheme {
       useMaterial3: false,
       brightness: Brightness.light,
       scaffoldBackgroundColor: white,
+      // 主色用黑色：按钮、光标、进度圈都跟着单色风格走
+      colorScheme: const ColorScheme.light(
+        primary: black,
+        onPrimary: white,
+        secondary: black,
+        onSecondary: white,
+        error: red,
+      ),
+      // 白底标题栏必须配深色前景，否则标题和返回箭头是白字白底，看不见
+      appBarTheme: const AppBarTheme(
+        backgroundColor: white,
+        foregroundColor: black,
+        elevation: 0,
+        centerTitle: false,
+        iconTheme: IconThemeData(color: black, size: 20),
+        titleTextStyle: TextStyle(color: black, fontSize: 18, fontWeight: FontWeight.w500),
+      ),
       cardColor: surface,
       dividerColor: lightGray,
       fontFamily: 'Inter',
