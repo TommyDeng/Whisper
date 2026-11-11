@@ -1,3 +1,4 @@
+import { handleFileRequest } from "./files";
 import { ROOM_CODE } from "./protocol";
 import { INVITE_KEY, RELAY_ID } from "./relay_limits";
 import { type TurnEnv, issueTurnCredentials } from "./turn";
@@ -55,6 +56,9 @@ export default {
         { headers: { "cache-control": "no-store" } },
       );
     }
+
+    const file = handleFileRequest(request, env.FILES, url);
+    if (file) return file;
 
     const relay = routeRelay(request, env, url);
     if (relay) return relay;
