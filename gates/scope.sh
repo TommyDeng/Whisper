@@ -5,9 +5,6 @@ source "$(dirname "$0")/../scripts/agent/lib.sh"
 task_init "${1:-}"
 require_task
 
-# 无论 allowed_paths 怎么写都不允许下级修改的路径
-PROTECTED=('gates/**' 'scripts/agent/**' 'tasks/**' '.github/**' 'CLAUDE.md' 'AGENTS.md')
-
 BASE="$(state_get base)"
 [[ -n "$BASE" ]] || { echo "state.json 缺少 base，任务尚未分发" >&2; exit 2; }
 

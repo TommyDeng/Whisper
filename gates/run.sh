@@ -13,9 +13,10 @@ commit_worktree "task/$TASK_ID: uncommitted changes before gate"
 
 LOG="$TASK_DIR/gate.log"
 HERE="$ROOT/gates"
+HEAD_SHA="$(git -C "$WT" rev-parse HEAD)"
 RC=0
 {
-  echo "### gate run $(date -Is)  task=$TASK_ID  head=$(git -C "$WT" rev-parse --short HEAD)"
+  echo "### gate run $(date -Is)  task=$TASK_ID  head=${HEAD_SHA:0:7}"
   echo "--- scope ---"
   bash "$HERE/scope.sh" "$TASK_ID" || RC=1
   if (( RC == 0 )); then
@@ -26,8 +27,8 @@ RC=0
 } > "$LOG" 2>&1 || true
 
 if (( RC == 0 )); then
-  state_set status review
-  echo "[gate] PASS  →  下一步：跨模型审查，然后由用户确认合并"
+  state_set status review gate_head "$HEAD_SHA" gate_passed_at "$(date -Is)"
+  echo "[gate] PASS  →  下一步：跨模型审查，用户确认后运行 scripts/agent/finish-task.sh $TASK_ID"
 else
   state_set status gate_failed
   echo "[gate] FAIL（第 $(state_get attempts) 次尝试）详见 tasks/$TASK_ID/gate.log" >&2
