@@ -197,24 +197,15 @@ class CallService {
 
   bool _disposed = false;
 
-  /// 构造时就订阅了 transport，但只有界面开始读取状态（snapshot / changes）
-  /// 之后才真正处理信令；未读取过状态的实例不会对信令做出反应。
-  bool _listening = false;
-
   /// 当前状态。
-  CallSnapshot get snapshot {
-    _listening = true;
-    return _snapshot;
-  }
+  CallSnapshot get snapshot => _snapshot;
 
   /// 状态变化（广播流）。
-  Stream<CallSnapshot> get changes {
-    _listening = true;
-    return _changesController.stream;
-  }
+  Stream<CallSnapshot> get changes => _changesController.stream;
 
   /// 呼叫 [contact]。当前有通话（不是 idle / ended）时抛 [StateError]。
   Future<void> start(Contact contact) async {
+    if (_disposed) return;
     final phase = _snapshot.phase;
     if (phase == CallPhase.outgoing ||
         phase == CallPhase.incoming ||
@@ -295,16 +286,18 @@ class CallService {
       ));
       _startConnectTimer(callId);
 
+      // offer 已经应用，对方的候选从现在起可以直接加入，不用等 answer 发出去。
+      _acceptDone = true;
+      unawaited(_flushRemoteCandidates(callId));
+
       await _trySend(contact, CallSignal.answer(callId, answerSdp).encode());
       if (!_isSameCall(callId) ||
           (_snapshot.phase != CallPhase.connecting && _snapshot.phase != CallPhase.active)) {
         return;
       }
 
-      _acceptDone = true;
       _canSendCandidates = true;
       unawaited(_flushLocalCandidates(callId));
-      await _flushRemoteCandidates(callId);
     } catch (_) {
       if (_isSameCall(callId) && _snapshot.phase == CallPhase.incoming) {
         await _trySend(contact, CallSignal.end(callId, CallSignal.reasonFailed).encode());
@@ -532,7 +525,7 @@ class CallService {
   }
 
   void _onIncoming(IncomingCallSignal message) {
-    if (_disposed || !_listening) return;
+    if (_disposed) return;
     final signal = CallSignal.decode(message.body);
     if (signal == null) return;
 
@@ -563,7 +556,7 @@ class CallService {
   }
 
   void _onDropped(({String sessionId, String id}) dropped) {
-    if (_disposed || !_listening) return;
+    if (_disposed) return;
     if (_snapshot.phase != CallPhase.outgoing) return;
     if (_offerMessageId == null || dropped.id != _offerMessageId) return;
     if (_snapshot.contact?.sessionId != dropped.sessionId) return;

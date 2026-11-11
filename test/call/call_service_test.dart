@@ -389,6 +389,7 @@ void main() {
     });
 
     test('对方一直不接：超时后发 end(hangup)，以 timeout 结束', () async {
+      await service.dispose();
       service = newService(ringTimeout: const Duration(milliseconds: 80));
       await call();
       await phase(CallPhase.ended);
@@ -399,6 +400,7 @@ void main() {
     });
 
     test('对方接听后响铃超时不再生效', () async {
+      await service.dispose();
       service = newService(ringTimeout: const Duration(milliseconds: 80));
       final callId = await call();
       transport.receive(bob, CallSignal.answer(callId, 'remote-answer'));
@@ -410,6 +412,7 @@ void main() {
     });
 
     test('音频连接迟迟建不起来：超时后发 end(failed)，以 failed 结束', () async {
+      await service.dispose();
       service = newService(connectTimeout: const Duration(milliseconds: 80));
       final callId = await call();
       transport.receive(bob, CallSignal.answer(callId, 'remote-answer'));
@@ -552,6 +555,7 @@ void main() {
     });
 
     test('一直不接：超时后以 missed 结束，不发 end', () async {
+      await service.dispose();
       service = newService(ringTimeout: const Duration(milliseconds: 80));
       await ring();
       await phase(CallPhase.ended);
