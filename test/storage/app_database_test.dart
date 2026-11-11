@@ -104,6 +104,26 @@ void main() {
       expect(await PendingInviteStore.loadActive(nowSeconds: 500), isEmpty);
     });
 
+    test('联系人的阅后即焚开关默认关，可以打开再关上', () async {
+      const contact = Contact(
+        deviceId: 'burn',
+        name: '小焚',
+        x25519PublicKeyBase64: 'x',
+        ed25519PublicKeyBase64: 'e',
+        safetyCode: 'code',
+        isVerified: false,
+        createdAt: 1,
+        lastMessageTime: 0,
+      );
+      await ContactStore.upsertContact(contact);
+      expect((await ContactStore.getContact('burn'))!.burnAfterRead, isFalse);
+      await ContactStore.updateContactBurnAfterRead('burn', true);
+      expect((await ContactStore.getContact('burn'))!.burnAfterRead, isTrue);
+      expect(contact.copyWith(burnAfterRead: true).burnAfterRead, isTrue);
+      await ContactStore.updateContactBurnAfterRead('burn', false);
+      expect((await ContactStore.getContact('burn'))!.burnAfterRead, isFalse);
+    });
+
     test('设置读写', () async {
       expect(await SettingsStore.get(SettingsStore.displayName), isNull);
       await SettingsStore.set(SettingsStore.displayName, '小红');

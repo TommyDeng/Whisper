@@ -66,6 +66,17 @@ class ContactStore {
     );
   }
 
+  /// 开启或关闭这个会话的阅后即焚
+  static Future<void> updateContactBurnAfterRead(String deviceId, bool enabled) async {
+    final db = await database;
+    await db.update(
+      'contacts',
+      {'burnAfterRead': enabled ? 1 : 0},
+      where: 'deviceId = ?',
+      whereArgs: [deviceId],
+    );
+  }
+
   /// 更新联系人最后消息时间
   static Future<void> updateContactLastMessageTime(String deviceId, int time) async {
     final db = await database;

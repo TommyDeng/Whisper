@@ -12,18 +12,52 @@ import 'package:cryptography/cryptography.dart';
 
 /// 一条消息的明文内容。
 class ChatContent {
-  const ChatContent({required this.type, required this.body, required this.sentAt});
+  const ChatContent({
+    required this.type,
+    required this.body,
+    required this.sentAt,
+    this.burn = false,
+    this.receiptKind,
+    this.ids = const [],
+  });
 
-  const ChatContent.text(this.body, {required this.sentAt}) : type = typeText;
+  /// 文本消息。[burn] 为 true 表示阅后即焚。
+  const ChatContent.text(this.body, {required this.sentAt, this.burn = false})
+      : type = typeText,
+        receiptKind = null,
+        ids = const [];
+
+  /// 回执：[kind] 是 [receiptDelivered] 或 [receiptRead]，[ids] 是被确认的消息 ID。
+  const ChatContent.receipt(String kind, this.ids, {required this.sentAt})
+      : type = typeReceipt,
+        body = '',
+        burn = false,
+        receiptKind = kind;
 
   static const String typeText = 'text';
+  static const String typeReceipt = 'receipt';
 
-  /// 内容类型。目前只有 [typeText]；不认识的类型由接收方忽略。
+  static const String receiptDelivered = 'delivered';
+  static const String receiptRead = 'read';
+
+  /// 一条回执最多带多少个消息 ID。
+  static const int maxReceiptIds = 100;
+
+  /// 内容类型：[typeText] 或 [typeReceipt]；不认识的类型由接收方忽略。
   final String type;
   final String body;
 
   /// 发送方本地时间，unix 毫秒。
   final int sentAt;
+
+  /// 仅文本：阅后即焚。
+  final bool burn;
+
+  /// 仅回执：种类。
+  final String? receiptKind;
+
+  /// 仅回执：被确认的消息 ID。
+  final List<String> ids;
 }
 
 /// 密文无法解开或内容不合法。不携带任何密钥或明文。

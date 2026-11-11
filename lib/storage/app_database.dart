@@ -13,7 +13,7 @@ import '../app_config.dart';
 class AppDatabase {
   AppDatabase._();
 
-  static const int schemaVersion = 2;
+  static const int schemaVersion = 3;
 
   static Future<Database>? _opening;
 
@@ -74,11 +74,13 @@ class AppDatabase {
         createdAt INTEGER NOT NULL,
         lastMessageTime INTEGER NOT NULL DEFAULT 0,
         sessionId TEXT NOT NULL DEFAULT '',
-        peerRole TEXT NOT NULL DEFAULT ''
+        peerRole TEXT NOT NULL DEFAULT '',
+        burnAfterRead INTEGER NOT NULL DEFAULT 0
       )
     ''');
     await _addColumnIfMissing(db, 'contacts', 'sessionId', "TEXT NOT NULL DEFAULT ''");
     await _addColumnIfMissing(db, 'contacts', 'peerRole', "TEXT NOT NULL DEFAULT ''");
+    await _addColumnIfMissing(db, 'contacts', 'burnAfterRead', 'INTEGER NOT NULL DEFAULT 0');
 
     await db.execute('''
       CREATE TABLE IF NOT EXISTS messages (

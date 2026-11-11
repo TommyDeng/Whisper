@@ -15,6 +15,7 @@ class Contact {
     required this.lastMessageTime,
     this.sessionId = '',
     this.peerRole = '',
+    this.burnAfterRead = false,
   });
 
   /// 设备唯一标识（公钥哈希）
@@ -47,6 +48,9 @@ class Contact {
   /// 自己在这个会话里的身份：`a`（当初的邀请人）或 `b`（加入者）。
   final String peerRole;
 
+  /// 这个会话是否开启阅后即焚：开启后自己发出的消息在对方读过之后两边都删除。
+  final bool burnAfterRead;
+
   /// 对方在这个会话里的身份。
   String get remoteRole => peerRole == 'a' ? 'b' : 'a';
 
@@ -57,6 +61,7 @@ class Contact {
     String? name,
     bool? isVerified,
     int? lastMessageTime,
+    bool? burnAfterRead,
   }) {
     return Contact(
       deviceId: deviceId,
@@ -69,6 +74,7 @@ class Contact {
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
       sessionId: sessionId,
       peerRole: peerRole,
+      burnAfterRead: burnAfterRead ?? this.burnAfterRead,
     );
   }
 
@@ -84,6 +90,7 @@ class Contact {
       'lastMessageTime': lastMessageTime,
       'sessionId': sessionId,
       'peerRole': peerRole,
+      'burnAfterRead': burnAfterRead ? 1 : 0,
     };
   }
 
@@ -99,6 +106,7 @@ class Contact {
       lastMessageTime: map['lastMessageTime'] as int,
       sessionId: map['sessionId'] as String? ?? '',
       peerRole: map['peerRole'] as String? ?? '',
+      burnAfterRead: (map['burnAfterRead'] as int? ?? 0) == 1,
     );
   }
 

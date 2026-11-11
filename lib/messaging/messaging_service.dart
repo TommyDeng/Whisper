@@ -26,6 +26,7 @@ class ChatMessage {
     required this.timestamp,
     required this.text,
     this.status,
+    this.burn = false,
   });
 
   final String id;
@@ -37,6 +38,9 @@ class ChatMessage {
 
   /// 仅自己发出的消息有。
   final OutgoingStatus? status;
+
+  /// 阅后即焚的消息。
+  final bool burn;
 }
 
 class _Session {
@@ -155,7 +159,8 @@ class MessagingService {
   bool peerOnline(String sessionId) => _sessions[sessionId]?.client.peerOnline ?? false;
 
   /// 发送一条文本。先落库再交给中继；离线时留在待发队列里，连上后自动发出。
-  Future<void> sendText(Contact contact, String text) async {
+  /// [burn] 为 true 时这条消息是阅后即焚的：对方读过之后两边都删除。
+  Future<void> sendText(Contact contact, String text, {bool burn = false}) async {
     final session = _sessions[contact.sessionId];
     if (session == null) throw StateError('联系人没有可用的会话');
     final me = await identity();
@@ -199,6 +204,18 @@ class MessagingService {
       ));
     }
     return result;
+  }
+
+  /// 把这个会话里收到的、还没读的消息标为已读（聊天界面显示它们时调用）。
+  /// 其中阅后即焚的消息会给对方发一条 `read` 回执。
+  Future<void> markRead(Contact contact) async {
+    throw UnimplementedError();
+  }
+
+  /// 删除已读的、收到的阅后即焚消息（离开聊天界面和启动时调用）。
+  /// [sessionId] 为 null 时处理所有会话。返回删除的条数。
+  Future<int> purgeBurned({String? sessionId}) async {
+    throw UnimplementedError();
   }
 
   Future<void> dispose() async {
