@@ -38,7 +38,8 @@ JSON 文本消息：
 {"t":"text","body":"你好","ts":1700000000000,"burn":true}
 ```
 
-- `t`：内容类型。目前有 `text` 和 `receipt`；接收方遇到不认识的类型时确认收到并忽略。
+- `t`：内容类型。目前有 `text` 和 `receipt`；`t` 为 `call` 的内容是通话信令，只作为临时消息
+  发送，见 `docs/call-signaling.md`。接收方遇到不认识的类型时确认收到并忽略。
 - `body`：正文，UTF-8 不超过 16 KiB。
 - `ts`：发送方本地时间，unix 毫秒。
 - `burn`：仅文本可选。为 `true` 时表示阅后即焚；缺省或不存在时为 `false`。
