@@ -32,7 +32,16 @@ export const OFFLINE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const INVITE_MAX_TTL_MS = 24 * 60 * 60 * 1000;
 export const INVITE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
-/** 存入时间为 storedAtMs 的离线消息，在 nowMs 时是否已过期。 */
+/** 文件 ID：32 字节随机数的 base64url（无填充），正好 43 个 URL 安全字符。见 docs/file-relay.md。 */
+export const FILE_ID = /^[A-Za-z0-9_-]{43}$/;
+
+/** 文件块序号的上限（含）。 */
+export const MAX_CHUNK_INDEX = 127;
+
+/** 单个密文块的最大字节数：1 MiB 明文 + 16 字节认证标签。 */
+export const MAX_FILE_CHUNK_BYTES = 1024 * 1024 + 16;
+
+/** 存入时间为 storedAtMs 的离线消息或文件块，在 nowMs 时是否已过期。 */
 export function isExpired(storedAtMs: number, nowMs: number): boolean {
   return nowMs - storedAtMs >= OFFLINE_TTL_MS;
 }

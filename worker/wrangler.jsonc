@@ -17,6 +17,8 @@
       { "name": "INVITES", "class_name": "InviteDO" }
     ]
   },
+  // 文件中转的密文分块（docs/file-relay.md）。存储桶在部署前另行创建。
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "whisper-files" }],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RoomDO"] },
     { "tag": "v2", "new_sqlite_classes": ["SessionDO", "InviteDO"] }

@@ -143,3 +143,13 @@ alarm 在 `expiresAt` 触发：用 `4002`（`expired`）关闭所有连接，删
 - 响应不缓存，Worker 不记录请求和凭据。
 - 这个接口目前不需要身份验证，任何人都能领到短期凭据并消耗 TURN 流量；用量需在 Cloudflare 控制台关注。
 - 客户端设 `WHISPER_FORCE_RELAY=1` 时只用中继候选，用来验证中继路径。
+
+## 文件中转（R2）
+
+离线文件的密文分块暂存在 R2（绑定 `FILES`），走普通 HTTP，不经过 Durable Object：
+
+- `PUT /file/<fileId>/<index>` 上传一个密文块（`201`；已存在 `409 chunk-exists`，超限 `413 chunk-too-large`，空体 `400 empty-chunk`）。
+- `GET /file/<fileId>/<index>` 下载一个密文块（不存在或已过 7 天 `404 not-found`）。
+- `DELETE /file/<fileId>` 删除这个文件的全部块。
+
+`fileId` 是 43 个 URL 安全字符，起访问凭据的作用；`index` 为 `0`–`127`。实现在 `worker/src/files.ts`，Worker 不记录请求信息。完整规则、分块与加密方式见 [file-relay.md](file-relay.md)。
