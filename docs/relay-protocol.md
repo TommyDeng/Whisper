@@ -129,3 +129,17 @@ alarm 在 `expiresAt` 触发：用 `4002`（`expired`）关闭所有连接，删
 2. 加入者 B 粘贴邀请码，以 `joiner` 身份连接，发送 `pair-request`：payload 是用 A 的公钥加密的 B 的公钥等信息。
 3. A 界面显示 B 的安全码，用户批准或拒绝。批准时 A 随机生成 `sessionId`，放在加密的 `pair-response` payload 里。
 4. B 收到后发 `pair-done`，双方各自保存联系人，之后都连 `/session/<sessionId>`（A 为 `peer=a`，B 为 `peer=b`）收发消息。
+
+## TURN 临时凭据
+
+`GET /turn-credentials` 返回一组短期 ICE 服务器配置，供语音通话在直连不通时走 Cloudflare Realtime TURN 中继：
+
+```json
+{"ok":true,"iceServers":[{"urls":["stun:…"]},{"urls":["turn:…","turns:…"],"username":"…","credential":"…"}]}
+```
+
+- Worker 用两个 secret（`TURN_KEY_ID`、`TURN_KEY_API_TOKEN`）向 Cloudflare 换凭据，有效期 4 小时；长期密钥不下发。
+- 没配置 secret 时返回 501 `turn-not-configured`；上游失败返回 502。客户端拿不到凭据就只用 STUN。
+- 响应不缓存，Worker 不记录请求和凭据。
+- 这个接口目前不需要身份验证，任何人都能领到短期凭据并消耗 TURN 流量；用量需在 Cloudflare 控制台关注。
+- 客户端设 `WHISPER_FORCE_RELAY=1` 时只用中继候选，用来验证中继路径。

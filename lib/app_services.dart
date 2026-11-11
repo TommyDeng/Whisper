@@ -56,7 +56,10 @@ class AppServices {
 
   CallMedia _createCallMedia() {
     final media = WebRtcCallMedia(
-      loadConfig: () => buildPeerConnectionConfig(signalingUrl: AppConfig.relayUri.toString()),
+      loadConfig: () => buildPeerConnectionConfig(
+        signalingUrl: AppConfig.relayUri.toString(),
+        forceRelay: AppConfig.forceRelay,
+      ),
     );
     unawaited(_callPathSubscription?.cancel());
     _callPaths.add(null);
