@@ -15,6 +15,9 @@ class AppConfig {
   /// 同一个系统账号下可以并存多个身份。未设置时为空串。
   static String get profile => sanitizeProfile(Platform.environment['WHISPER_PROFILE']);
 
+  /// `WHISPER_FORCE_RELAY=1` 时通话只走 TURN 中继，用来验证中继路径。
+  static bool get forceRelay => Platform.environment['WHISPER_FORCE_RELAY'] == '1';
+
   /// 只接受 ws/wss，且非本机地址必须用 wss；不合法时回落到默认地址。
   static Uri parseRelayUrl(String? value) {
     final fallback = Uri.parse(defaultRelayUrl);
