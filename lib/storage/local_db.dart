@@ -1,10 +1,7 @@
-/// 耳语本地加密存储。
+/// 消息表和待发回执表的读写。
 ///
-/// 聊天历史已在客户端 E2EE 加密，数据库文件本身不额外加密。
-/// 提供：
-/// - 消息插入/查询/更新/删除
-/// - 7 天自动删除旧消息
-/// - 阅后即焚：读取后删除
+/// 消息正文以端到端加密的密文存放；数据库文件本身另有整库加密（见 db_encryption.dart）。
+library;
 
 import 'package:sqflite/sqflite.dart';
 
@@ -112,26 +109,85 @@ class LocalDatabase {
     return db.delete('messages', where: 'sessionId = ?', whereArgs: [sessionId]);
   }
 
-  /// 标记某个会话里方向为 received、尚未读的消息为已读，返回本次新标记的消息 id 列表
-  static Future<List<String>> markSessionRead(String sessionId) async {
+  /// 某个会话里收到的、还没读的消息：`msgId` 和 `burnAfterRead`。
+  static Future<List<({String msgId, bool burn})>> getUnreadReceived(String sessionId) async {
+    final db = await database;
+    final rows = await db.query(
+      'messages',
+      columns: ['msgId', 'burnAfterRead'],
+      where: 'sessionId = ? AND direction = ? AND read = 0',
+      whereArgs: [sessionId, 'received'],
+      orderBy: 'timestamp ASC, rowid ASC',
+    );
+    return [
+      for (final row in rows)
+        (msgId: row['msgId'] as String, burn: (row['burnAfterRead'] as int) != 0),
+    ];
+  }
+
+  /// 把 [msgIds] 标为已读，并在同一个事务里写入要发给对方的回执 [receipts]。
+  /// 两件事要么都发生要么都不发生：否则中途崩溃会让对方永远收不到已读回执。
+  static Future<void> markReadWithReceipts({
+    required String sessionId,
+    required List<String> msgIds,
+    required List<({String msgId, String payload})> receipts,
+  }) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
-    final pending = await db.query(
-      'messages',
-      columns: ['msgId'],
-      where: 'sessionId = ? AND direction = ? AND read = 0',
-      whereArgs: [sessionId, 'received'],
-    );
-    final ids = pending.map((r) => r['msgId'] as String).toList();
-    if (ids.isEmpty) return [];
-    await db.update(
-      'messages',
-      {'read': 1, 'readAt': now},
-      where: 'sessionId = ? AND direction = ? AND read = 0',
-      whereArgs: [sessionId, 'received'],
-    );
-    return ids;
+    await db.transaction((txn) async {
+      for (final chunk in _chunks(msgIds)) {
+        await txn.update(
+          'messages',
+          {'read': 1, 'readAt': now},
+          where: 'sessionId = ? AND direction = ? AND read = 0 AND msgId IN (${_marks(chunk)})',
+          whereArgs: [sessionId, 'received', ...chunk],
+        );
+      }
+      for (final receipt in receipts) {
+        await txn.insert(
+          'outbox',
+          {'msgId': receipt.msgId, 'sessionId': sessionId, 'payload': receipt.payload, 'createdAt': now},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
   }
+
+  /// 应用对方发来的回执：[msgIds] 里属于 [sessionId]、自己发出的消息标为已送达；
+  /// [deleteBurned] 为 true 时其中阅后即焚的直接删除。返回被删除的 msgId。
+  static Future<List<String>> applyReceipt({
+    required String sessionId,
+    required List<String> msgIds,
+    required bool deleteBurned,
+  }) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      final deleted = <String>[];
+      for (final chunk in _chunks(msgIds)) {
+        final scope = 'sessionId = ? AND direction = ? AND msgId IN (${_marks(chunk)})';
+        final args = [sessionId, 'sent', ...chunk];
+        await txn.update('messages', {'delivered': 1}, where: scope, whereArgs: args);
+        if (!deleteBurned) continue;
+        final burned = await txn.query(
+          'messages',
+          columns: ['msgId'],
+          where: '$scope AND burnAfterRead = 1',
+          whereArgs: args,
+        );
+        deleted.addAll(burned.map((row) => row['msgId'] as String));
+        await txn.delete('messages', where: '$scope AND burnAfterRead = 1', whereArgs: args);
+      }
+      return deleted;
+    });
+  }
+
+  static Iterable<List<String>> _chunks(List<String> ids) sync* {
+    for (var i = 0; i < ids.length; i += 500) {
+      yield ids.sublist(i, i + 500 > ids.length ? ids.length : i + 500);
+    }
+  }
+
+  static String _marks(List<String> ids) => List.filled(ids.length, '?').join(',');
 
   /// 标记消息为已读
   static Future<void> markRead(String msgId) async {
@@ -198,16 +254,60 @@ class LocalDatabase {
     );
   }
 
-  /// 7 天自动删除旧消息（非阅后即焚的消息）
-  static Future<int> purgeExpiredMessages({int retentionDays = 7}) async {
+  /// 删除早于 [cutoff]（unix 毫秒）的消息（包括没读的和阅后即焚的）以及同样旧的待发回执。
+  /// 返回被删除消息的 msgId 和 sessionId。
+  static Future<List<({String msgId, String sessionId})>> purgeExpired(int cutoff) async {
     final db = await database;
-    final cutoff =
-        DateTime.now().subtract(Duration(days: retentionDays)).millisecondsSinceEpoch;
-    return await db.delete(
-      'messages',
-      where: 'timestamp < ? AND burnAfterRead = 0',
-      whereArgs: [cutoff],
-    );
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'messages',
+        columns: ['msgId', 'sessionId'],
+        where: 'timestamp < ?',
+        whereArgs: [cutoff],
+      );
+      await txn.delete('messages', where: 'timestamp < ?', whereArgs: [cutoff]);
+      await txn.delete('outbox', where: 'createdAt < ?', whereArgs: [cutoff]);
+      return [
+        for (final row in rows)
+          (msgId: row['msgId'] as String, sessionId: row['sessionId'] as String),
+      ];
+    });
+  }
+
+  /// 重新配对后把旧会话的消息搬到新会话：[rewritten] 是用新会话重新加密过的密文，
+  /// 不在其中的旧消息（解不开的）连同旧会话的待发回执一起删除。
+  /// 对方还没确认送达的消息重置为“中继未收下”，由新会话重发（msgId 不变，对方会去重）。
+  static Future<void> moveSessionMessages({
+    required String fromSessionId,
+    required String toSessionId,
+    required Map<String, String> rewritten,
+    required String peerPublicKey,
+  }) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      for (final entry in rewritten.entries) {
+        await txn.update(
+          'messages',
+          {'sessionId': toSessionId, 'ciphertext': entry.value},
+          where: 'msgId = ? AND sessionId = ?',
+          whereArgs: [entry.key, fromSessionId],
+        );
+      }
+      await txn.delete('messages', where: 'sessionId = ?', whereArgs: [fromSessionId]);
+      await txn.delete('outbox', where: 'sessionId = ?', whereArgs: [fromSessionId]);
+      await txn.update(
+        'messages',
+        {'relayed': 0},
+        where: 'sessionId = ? AND direction = ? AND delivered = 0',
+        whereArgs: [toSessionId, 'sent'],
+      );
+      await txn.update(
+        'messages',
+        {'senderPublicKey': peerPublicKey},
+        where: 'sessionId = ? AND direction = ?',
+        whereArgs: [toSessionId, 'received'],
+      );
+    });
   }
 
   /// 删除已读的、收到的阅后即焚消息。

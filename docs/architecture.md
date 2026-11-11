@@ -8,7 +8,7 @@
 - **加密**：客户端用 **libsodium**（`sodium_libs`）或 Dart `cryptography` 包。
 - **密钥存储**：系统安全存储，通过 `flutter_secure_storage`：Windows DPAPI / 凭据管理器，Linux libsecret（GNOME Keyring / KWallet）。
 - **语音**：`flutter_webrtc` P2P，DTLS-SRTP；**局域网优先**：物理局域网 → ZeroTier → 公网 STUN → Cloudflare TURN（免费额度内，MVP 启用）。
-- **存储**：服务端无数据库（D1/KV 仅必要时）；离线消息密文在 DO 存储；离线文件密文分块在 **Cloudflare R2**（超出免费额度需所有者批准）。客户端本地历史使用加密 SQLite（如 SQLCipher），默认 7 天自动删除。
+- **存储**：服务端无数据库（D1/KV 仅必要时）；离线消息密文在 DO 存储；离线文件密文分块在 **Cloudflare R2**（超出免费额度需所有者批准）。客户端本地历史使用加密 SQLite（SQLite3 Multiple Ciphers），默认 7 天自动删除，详见 `local-storage.md`。
 - **MVP 约束**：一台设备 = 一个身份（无多设备/备份）；仅 1:1 会话。
 
 ```mermaid

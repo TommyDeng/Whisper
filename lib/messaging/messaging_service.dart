@@ -200,25 +200,22 @@ class MessagingService {
     _notify(contact.sessionId);
   }
 
-  /// 用会话密钥把一条回执加密、写入 outbox，会话已连接时立即发出。
-  Future<void> _sendReceipt(_Session session, ChatContent receipt) async {
+  /// 加密一条发给对方的回执，返回它的 id 和密文。
+  Future<({String msgId, String payload})> _sealReceipt(Contact contact, ChatContent receipt) async {
     final id = MessageCodec.newMessageId();
     final payload = await MessageCodec.seal(
-      key: await session.key,
-      sessionId: session.contact.sessionId,
-      senderRole: session.contact.peerRole,
+      key: await (_sessions[contact.sessionId]?.key ?? _deriveKey(contact)),
+      sessionId: contact.sessionId,
+      senderRole: contact.peerRole,
       messageId: id,
       content: receipt,
     );
-    await LocalDatabase.insertOutbox(
-      msgId: id,
-      sessionId: session.contact.sessionId,
-      payload: payload,
-      createdAt: DateTime.now().millisecondsSinceEpoch,
-    );
-    if (_sessions[session.contact.sessionId] == session) {
-      session.client.send(id, payload);
-    }
+    return (msgId: id, payload: payload);
+  }
+
+  /// 会话连着就把回执交给中继；没连着时它留在 outbox 里，下次 [attach] 发出。
+  void _trySend(String sessionId, ({String msgId, String payload}) receipt) {
+    _sessions[sessionId]?.client.send(receipt.msgId, receipt.payload);
   }
 
   /// 一个会话的全部消息，已解密，按时间升序。
@@ -242,55 +239,28 @@ class MessagingService {
   /// 把这个会话里收到的、还没读的消息标为已读（聊天界面显示它们时调用）。
   /// 其中阅后即焚的消息会给对方发一条 `read` 回执。
   Future<void> markRead(Contact contact) async {
-    final session = _sessions[contact.sessionId];
-    final ids = await LocalDatabase.markSessionRead(contact.sessionId);
-    if (ids.isEmpty) return;
+    final unread = await LocalDatabase.getUnreadReceived(contact.sessionId);
+    if (unread.isEmpty) return;
+    final burned = [for (final message in unread) if (message.burn) message.msgId];
+    final now = DateTime.now().millisecondsSinceEpoch;
 
-    // 其中 burnAfterRead 为真的消息要发 read 回执；只发给本会话的、方向为 received 的消息
-    final burnedIds = <String>[];
-    for (final id in ids) {
-      final message = await LocalDatabase.getMessage(id);
-      if (message != null && message.burnAfterRead) burnedIds.add(id);
+    // 一条回执最多带 maxReceiptIds 个 id，多了拆成几条
+    final receipts = <({String msgId, String payload})>[];
+    for (var i = 0; i < burned.length; i += ChatContent.maxReceiptIds) {
+      final end = i + ChatContent.maxReceiptIds;
+      final batch = burned.sublist(i, end > burned.length ? burned.length : end);
+      receipts.add(await _sealReceipt(
+        contact,
+        ChatContent.receipt(ChatContent.receiptRead, batch, sentAt: now),
+      ));
     }
-    if (burnedIds.isEmpty) return;
-
-    // 合成一条 read 回执，超过 100 个按 100 个一批拆成多条
-    for (var i = 0; i < burnedIds.length; i += ChatContent.maxReceiptIds) {
-      final batch = burnedIds.sublist(
-        i,
-        i + ChatContent.maxReceiptIds > burnedIds.length
-            ? burnedIds.length
-            : i + ChatContent.maxReceiptIds,
-      );
-      if (session != null) {
-        await _sendReceipt(
-          session,
-          ChatContent.receipt(ChatContent.receiptRead, batch, sentAt: DateTime.now().millisecondsSinceEpoch),
-        );
-      } else {
-        // 会话未连接：回执已经在 markSessionRead 之前写进库？不是。这里需要先写 outbox。
-        // 统一走 _sendReceipt 会需要 session；会话没连接时先落 outbox，attach 时重发。
-        final receiptId = MessageCodec.newMessageId();
-        // 先加密出 payload 再写出box；需要密钥。
-        final key = await (_deriveKey(contact));
-        final payload = await MessageCodec.seal(
-          key: key,
-          sessionId: contact.sessionId,
-          senderRole: contact.peerRole,
-          messageId: receiptId,
-          content: ChatContent.receipt(
-            ChatContent.receiptRead,
-            batch,
-            sentAt: DateTime.now().millisecondsSinceEpoch,
-          ),
-        );
-        await LocalDatabase.insertOutbox(
-          msgId: receiptId,
-          sessionId: contact.sessionId,
-          payload: payload,
-          createdAt: DateTime.now().millisecondsSinceEpoch,
-        );
-      }
+    await LocalDatabase.markReadWithReceipts(
+      sessionId: contact.sessionId,
+      msgIds: [for (final message in unread) message.msgId],
+      receipts: receipts,
+    );
+    for (final receipt in receipts) {
+      _trySend(contact.sessionId, receipt);
     }
     _notify(contact.sessionId);
   }
@@ -299,17 +269,90 @@ class MessagingService {
   /// [sessionId] 为 null 时处理所有会话。返回删除的条数。
   Future<int> purgeBurned({String? sessionId}) async {
     final affected = await LocalDatabase.deleteReadBurned(sessionId: sessionId);
-    final sessionsToNotify = <String>{};
     for (final row in affected) {
       _plaintext.remove(row['msgId'] as String);
-      if (row['sessionId'] is String) {
-        sessionsToNotify.add(row['sessionId'] as String);
-      }
     }
-    for (final sid in sessionsToNotify) {
-      _notify(sid);
+    for (final id in {for (final row in affected) row['sessionId'] as String}) {
+      _notify(id);
     }
     return affected.length;
+  }
+
+  /// 删除超过 [retention] 的消息，不管读没读过、是不是阅后即焚（启动时和之后定时调用）。
+  /// 返回删除的条数。
+  Future<int> purgeExpired({DateTime? now, Duration retention = const Duration(days: 7)}) async {
+    final cutoff = (now ?? DateTime.now()).subtract(retention).millisecondsSinceEpoch;
+    final removed = await LocalDatabase.purgeExpired(cutoff);
+    for (final message in removed) {
+      _plaintext.remove(message.msgId);
+      _failed.remove(message.msgId);
+    }
+    for (final id in {for (final message in removed) message.sessionId}) {
+      _notify(id);
+    }
+    return removed.length;
+  }
+
+  /// 与同一个人重新配对后调用：把旧会话 [previous] 的聊天记录搬到新会话 [current] 名下。
+  ///
+  /// 密文绑定了会话 ID 和角色，所以要用旧密钥解开、再用新会话重新加密（msgId 不变）。
+  /// 解不开的旧消息（例如自己的身份已重置）无法再显示，直接删除。
+  /// 调用前后各自 [detach] 旧会话、[attach] 新会话；返回搬过来的条数。
+  Future<int> adopt(Contact previous, Contact current) async {
+    if (previous.sessionId.isEmpty || previous.sessionId == current.sessionId) return 0;
+    final stored = await LocalDatabase.getSessionMessages(previous.sessionId);
+    final rewritten = <String, String>{};
+    if (stored.isNotEmpty) {
+      try {
+        final oldKey = await _deriveKey(previous);
+        final newKey = await (_sessions[current.sessionId]?.key ?? _deriveKey(current));
+        for (final message in stored) {
+          final sent = message.direction == 'sent';
+          try {
+            final content = await MessageCodec.open(
+              key: oldKey,
+              sessionId: previous.sessionId,
+              senderRole: sent ? previous.peerRole : previous.remoteRole,
+              messageId: message.msgId,
+              payload: message.ciphertext,
+            );
+            rewritten[message.msgId] = await MessageCodec.seal(
+              key: newKey,
+              sessionId: current.sessionId,
+              senderRole: sent ? current.peerRole : current.remoteRole,
+              messageId: message.msgId,
+              content: content,
+            );
+          } catch (_) {
+            // 这一条解不开，不搬
+          }
+        }
+      } catch (_) {
+        // 密钥算不出来：一条也搬不了
+      }
+    }
+    await LocalDatabase.moveSessionMessages(
+      fromSessionId: previous.sessionId,
+      toSessionId: current.sessionId,
+      rewritten: rewritten,
+      peerPublicKey: current.x25519PublicKeyBase64,
+    );
+    for (final message in stored) {
+      if (!rewritten.containsKey(message.msgId)) _plaintext.remove(message.msgId);
+    }
+    _notify(previous.sessionId);
+    _notify(current.sessionId);
+    return rewritten.length;
+  }
+
+  /// 清空全部数据时调用：断开所有连接、丢掉内存里的明文，回到 [start] 之前的状态。
+  Future<void> reset() async {
+    for (final sessionId in _sessions.keys.toList()) {
+      await _close(sessionId);
+    }
+    _plaintext.clear();
+    _failed.clear();
+    _started = false;
   }
 
   Future<void> dispose() async {
@@ -397,62 +440,37 @@ class MessagingService {
     _plaintext[message.id] = content.body;
     await ContactStore.updateContactLastMessageTime(contact.deviceId, message.ts);
 
-    // 只有新插入的消息才回 delivered 回执，ids 就是这条消息的 id
-    await _sendReceipt(
-      session,
+    // 只有新插入的消息才回 delivered 回执。先写 outbox 再发，重启也不会丢。
+    final receipt = await _sealReceipt(
+      contact,
       ChatContent.receipt(
         ChatContent.receiptDelivered,
         [message.id],
         sentAt: DateTime.now().millisecondsSinceEpoch,
       ),
     );
+    await LocalDatabase.insertOutbox(
+      msgId: receipt.msgId,
+      sessionId: contact.sessionId,
+      payload: receipt.payload,
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    if (identical(_sessions[contact.sessionId], session)) _trySend(contact.sessionId, receipt);
     _notify(contact.sessionId);
   }
 
-  /// 处理收到的回执：delivered/read 把 ids 里属于本会话、方向为 sent 的消息
-  /// 标为已送达；read 里 burnAfterRead 为真的直接从库里删除（并清内存明文缓存）。
+  /// 处理对方发来的回执。只动本会话里自己发出的消息；不认识的种类忽略。
   Future<void> _handleReceipt(_Session session, ChatContent content) async {
-    final contact = session.contact;
-    final ids = content.ids;
-    if (ids.isEmpty) return;
-
-    final db = await LocalDatabase.database;
-
-    for (final id in ids) {
-      final message = await LocalDatabase.getMessage(id);
-      if (message == null) continue;
-      if (message.sessionId != contact.sessionId) continue;
-      if (message.direction != 'sent') continue;
-      await db.update(
-        'messages',
-        {'delivered': 1},
-        where: 'msgId = ?',
-        whereArgs: [id],
-      );
-    }
-
-    if (content.receiptKind == ChatContent.receiptRead) {
-      final burned = <String>[];
-      for (final id in ids) {
-        final message = await LocalDatabase.getMessage(id);
-        if (message == null) continue;
-        if (message.sessionId != contact.sessionId) continue;
-        if (message.direction != 'sent') continue;
-        if (message.burnAfterRead) burned.add(id);
-      }
-      if (burned.isNotEmpty) {
-        await db.delete(
-          'messages',
-          where: 'msgId IN (${List.generate(burned.length, (_) => '?').join(',')})',
-          whereArgs: burned,
-        );
-        for (final id in burned) {
-          _plaintext.remove(id);
-        }
-      }
-    }
-
-    _notify(contact.sessionId);
+    final kind = content.receiptKind;
+    if (kind != ChatContent.receiptDelivered && kind != ChatContent.receiptRead) return;
+    final sessionId = session.contact.sessionId;
+    final deleted = await LocalDatabase.applyReceipt(
+      sessionId: sessionId,
+      msgIds: content.ids,
+      deleteBurned: kind == ChatContent.receiptRead,
+    );
+    deleted.forEach(_plaintext.remove);
+    _notify(sessionId);
   }
 
   Future<void> _close(String sessionId) async {
