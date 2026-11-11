@@ -1,4 +1,4 @@
-/// 应用级服务：身份、消息、配对。界面通过 [AppServices.instance] 取用。
+/// 应用级服务：身份、消息、配对、通话。界面通过 [AppServices.instance] 取用。
 ///
 /// 构造时不做任何 I/O；网络连接只在 [start]（由 main 调用）之后才建立，
 /// 所以 widget 测试里可以直接构造界面。
@@ -7,13 +7,18 @@ library;
 import 'dart:async';
 
 import 'app_config.dart';
+import 'call/call_service.dart';
+import 'call/call_transport.dart';
+import 'call/webrtc_call_media.dart';
 import 'contact/contact.dart';
 import 'identity/identity_store.dart';
 import 'messaging/messaging_service.dart';
 import 'pairing/pairing_manager.dart';
 import 'relay/ws_connector.dart';
+import 'session/rtc_config.dart';
 import 'storage/app_database.dart';
 import 'storage/settings_store.dart';
+import 'voice/ice_strategy.dart';
 
 class AppServices {
   AppServices._();
@@ -37,6 +42,28 @@ class AppServices {
     onContact: _onContact,
   );
 
+  /// 语音通话。信令走 [messaging] 的加密临时消息，音频走 WebRTC。
+  late final CallService calls = CallService(
+    transport: MessagingCallTransport(messaging),
+    createMedia: _createCallMedia,
+  );
+
+  final _callPaths = StreamController<IcePathType?>.broadcast();
+  StreamSubscription<IcePathType>? _callPathSubscription;
+
+  /// 当前通话走的路径（局域网 / ZeroTier / 公网直连 / 中继）；新通话开始时先发一个 null。
+  Stream<IcePathType?> get callPaths => _callPaths.stream;
+
+  CallMedia _createCallMedia() {
+    final media = WebRtcCallMedia(
+      loadConfig: () => buildPeerConnectionConfig(signalingUrl: AppConfig.relayUri.toString()),
+    );
+    unawaited(_callPathSubscription?.cancel());
+    _callPaths.add(null);
+    _callPathSubscription = media.paths.listen(_callPaths.add);
+    return media;
+  }
+
   Future<void>? _starting;
   Timer? _retentionTimer;
 
@@ -46,6 +73,7 @@ class AppServices {
   Future<void> _start() async {
     await _applyRetention();
     _retentionTimer ??= Timer.periodic(const Duration(hours: 1), (_) => unawaited(_applyRetention()));
+    calls; // 开始监听来电
     await messaging.start();
     await pairing.start();
   }
@@ -84,6 +112,9 @@ class AppServices {
   Future<void> clearAllData() async {
     _retentionTimer?.cancel();
     _retentionTimer = null;
+    await calls.hangup();
+    await calls.decline();
+    calls.dismiss();
     await pairing.reset();
     await messaging.reset();
     await AppDatabase.destroy();

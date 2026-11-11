@@ -34,8 +34,16 @@ class ChatContent {
         burn = false,
         receiptKind = kind;
 
+  /// 通话信令：[body] 是 `CallSignal.encode()` 的结果。只作为临时消息发送，不落库。
+  const ChatContent.call(this.body, {required this.sentAt})
+      : type = typeCall,
+        burn = false,
+        receiptKind = null,
+        ids = const [];
+
   static const String typeText = 'text';
   static const String typeReceipt = 'receipt';
+  static const String typeCall = 'call';
 
   static const String receiptDelivered = 'delivered';
   static const String receiptRead = 'read';
@@ -43,7 +51,7 @@ class ChatContent {
   /// 一条回执最多带多少个消息 ID。
   static const int maxReceiptIds = 100;
 
-  /// 内容类型：[typeText] 或 [typeReceipt]；不认识的类型由接收方忽略。
+  /// 内容类型：[typeText]、[typeReceipt] 或 [typeCall]；不认识的类型由接收方忽略。
   final String type;
   final String body;
 
@@ -75,6 +83,9 @@ class MessageCodec {
 
   /// 文本消息正文的上限（UTF-8 字节）。
   static const int maxTextBytes = 16 * 1024;
+
+  /// 通话信令正文的上限（UTF-8 字节）。
+  static const int maxSignalBytes = 32 * 1024;
 
   /// 明文填充到这个大小的整数倍，减少长度泄露。
   static const int paddingBlock = 1024;
@@ -125,6 +136,10 @@ class MessageCodec {
     if (content.type == ChatContent.typeText &&
         utf8.encode(content.body).length > maxTextBytes) {
       throw ArgumentError('消息过长');
+    }
+    if (content.type == ChatContent.typeCall &&
+        utf8.encode(content.body).length > maxSignalBytes) {
+      throw ArgumentError('信令过长');
     }
     if (content.type == ChatContent.typeReceipt) {
       final kind = content.receiptKind;

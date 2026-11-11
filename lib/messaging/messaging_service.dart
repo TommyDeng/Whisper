@@ -71,10 +71,43 @@ class MessagingService {
   final Map<String, String> _plaintext = {}; // msgId → 正文
   final Set<String> _failed = {};
   final _updates = StreamController<String>.broadcast();
+  final _callSignalsController =
+      StreamController<({Contact contact, String body})>.broadcast();
+  final _signalDroppedController =
+      StreamController<({String sessionId, String id})>.broadcast();
   bool _started = false;
 
   /// 某个会话有变化（新消息、状态、连接、对方在线）时发出它的 sessionId。
   Stream<String> get updates => _updates.stream;
+
+  /// 对方发来的通话信令（广播流）：发送方和信令正文（`ChatContent.call` 的 body，未校验）。
+  /// 信令不落库、不回回执。
+  Stream<({Contact contact, String body})> get callSignals =>
+      _callSignalsController.stream;
+
+  /// 因对方不在线被中继丢弃的临时消息（广播流）：会话 ID 和消息 ID。
+  Stream<({String sessionId, String id})> get signalDropped =>
+      _signalDroppedController.stream;
+
+  /// 把一条通话信令加密后作为临时消息发给 [contact]：不落库、不排队、不重发。
+  /// 返回消息 ID；会话不存在或此刻没连上中继时返回 null（没有发出）。
+  Future<String?> sendCallSignal(Contact contact, String body) async {
+    final session = _sessions[contact.sessionId];
+    if (session == null) return null;
+    final id = MessageCodec.newMessageId();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final payload = await MessageCodec.seal(
+      key: await session.key,
+      sessionId: contact.sessionId,
+      senderRole: contact.peerRole,
+      messageId: id,
+      content: ChatContent.call(body, sentAt: now),
+    );
+    // 发送前会话可能已被替换或关闭
+    if (!identical(_sessions[contact.sessionId], session)) return null;
+    final sent = session.client.sendEphemeral(id, payload);
+    return sent ? id : null;
+  }
 
   /// 为所有已有会话的联系人建立连接。重复调用无效果。
   Future<void> start() async {
@@ -117,6 +150,9 @@ class MessagingService {
     session.subscriptions.addAll([
       client.states.listen((_) => _notify(sessionId)),
       client.peerOnlineChanges.listen((_) => _notify(sessionId)),
+      client.dropped.listen((id) => _signalDroppedController.add(
+            (sessionId: sessionId, id: id),
+          )),
       client.stored.listen((id) async {
         await LocalDatabase.markRelayed(id);
         await LocalDatabase.deleteOutbox(id);
@@ -360,6 +396,8 @@ class MessagingService {
       await _close(sessionId);
     }
     await _updates.close();
+    await _callSignalsController.close();
+    await _signalDroppedController.close();
   }
 
   // ---------------------------------------------------------------------------
@@ -421,6 +459,14 @@ class MessagingService {
     // 回执不进聊天记录、不更新联系人时间、不回回执；照常确认让中继确认收下。
     if (content.type == ChatContent.typeReceipt) {
       await _handleReceipt(session, content);
+      return;
+    }
+
+    // 通话信令不落库、不回回执、不更新联系人时间、不发通知；照常确认让中继确认收下。
+    if (content.type == ChatContent.typeCall) {
+      _callSignalsController.add(
+        (contact: session.contact, body: content.body),
+      );
       return;
     }
 

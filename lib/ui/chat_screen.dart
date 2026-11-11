@@ -261,6 +261,15 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _startCall() async {
+    try {
+      await AppServices.instance.calls.start(widget.contact);
+    } on StateError {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已有一通通话在进行')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -286,6 +295,11 @@ class _ChatScreenState extends State<ChatScreen> {
         elevation: 0,
         backgroundColor: AppTheme.white,
         actions: [
+          IconButton(
+            tooltip: '语音通话',
+            icon: const Icon(Icons.call_outlined, color: AppTheme.black),
+            onPressed: () => unawaited(_startCall()),
+          ),
           IconButton(
             tooltip: _burn ? '关闭阅后即焚' : '开启阅后即焚',
             icon: Icon(
