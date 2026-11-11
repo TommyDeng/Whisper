@@ -31,9 +31,8 @@ Future<Map<String, dynamic>> buildPeerConnectionConfig({String? signalingUrl}) a
           });
         }
       }
-    } catch (error) {
+    } catch (_) {
       // TURN 获取失败不阻断，回退到 STUN/直连
-      print('TURN credentials unavailable: $error');
     }
   }
 
