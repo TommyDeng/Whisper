@@ -85,6 +85,7 @@ class PairingManager {
   final _notices = StreamController<PairingNotice>.broadcast();
   Future<InvitationCode>? _creating;
   bool _disposed = false;
+  final Set<PairingFlow> _silenced = {};
 
   /// 任何一个配对的状态变了（广播流）。
   Stream<void> get changes => _changes.stream;
@@ -239,7 +240,8 @@ class PairingManager {
       flows.remove(inviteId);
       final failure = flow.failure;
       // 应用退出、或被另一个实例顶掉时保留记录，下次启动接着等；其它结局都是终局
-      final keep = _disposed || (failure == PairingFailure.replaced);
+      final silenced = _silenced.remove(flow);
+      final keep = _disposed || silenced || (failure == PairingFailure.replaced);
       if (!keep) {
         try {
           await PendingInviteStore.remove(inviteId);
@@ -247,7 +249,7 @@ class PairingManager {
           // 删不掉也没关系：过期后会被清理
         }
       }
-      if (_disposed) return;
+      if (_disposed || silenced) return;
       switch (status) {
         case PairingStatus.done:
           _notices.add(PairingNotice(
@@ -294,6 +296,17 @@ class PairingManager {
 
   void _notifyChanged() {
     if (!_disposed) _changes.add(null);
+  }
+
+  /// 清空全部数据时调用：放弃所有进行中的配对，不发任何提示。
+  /// 本地保存的邀请由调用方连同数据库一起删除。
+  Future<void> reset() async {
+    final flows = <PairingFlow>[..._inviters.values, ..._joiners.values];
+    _silenced.addAll(flows);
+    _inviters.clear();
+    _joiners.clear();
+    await Future.wait(flows.map((flow) => flow.cancel()));
+    _notifyChanged();
   }
 
   /// 断开所有配对连接。本地保存的邀请保留，下次 [start] 时恢复。

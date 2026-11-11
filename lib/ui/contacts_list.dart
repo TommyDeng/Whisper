@@ -186,6 +186,33 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
     await _loadContacts();
   }
 
+  Future<void> _clearAllData() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清除全部数据？'),
+        content: const Text(
+          '本机上的聊天记录、联系人和你的身份都会被删除，且无法恢复。\n\n'
+          '之后你会得到一个新的身份，需要和每位联系人重新配对。对方设备上的记录不受影响。',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('全部清除')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    String message = '已清除全部数据';
+    try {
+      await _services.clearAllData();
+    } catch (_) {
+      message = '没能清除完，请重启应用后再试一次';
+    }
+    await _loadContacts();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final pendingRequests = _services.pairing.incomingRequests.length;
@@ -206,6 +233,14 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
               icon: const Icon(Icons.qr_code, size: 20),
               onPressed: _openPairing,
             ),
+          ),
+          PopupMenuButton<String>(
+            tooltip: '更多',
+            icon: const Icon(Icons.more_vert, size: 20),
+            onSelected: (_) => unawaited(_clearAllData()),
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'clear', child: Text('清除全部数据…')),
+            ],
           ),
         ],
       ),

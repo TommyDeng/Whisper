@@ -23,12 +23,16 @@ class ChatBubble extends StatelessWidget {
   final OutgoingStatus? status;
   final SecurityStatus securityStatus;
 
+  /// 阅后即焚的消息：对方读过之后两边都会删除。
+  final bool burn;
+
   const ChatBubble({
     super.key,
     required this.text,
     required this.isSent,
     this.status,
     this.securityStatus = SecurityStatus.unverified,
+    this.burn = false,
   });
 
   @override
@@ -40,6 +44,10 @@ class ChatBubble extends StatelessWidget {
       OutgoingStatus.failed => (Icons.error_outline, '发送失败', AppTheme.red),
       null => (Icons.done, '', AppTheme.midGray),
     };
+    const burnMark = Tooltip(
+      message: '阅后即焚：读过之后两边都会删除',
+      child: Icon(Icons.local_fire_department_outlined, size: 14, color: AppTheme.midGray),
+    );
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       mainAxisAlignment: isSent ? MainAxisAlignment.end : MainAxisAlignment.start,
@@ -48,6 +56,7 @@ class ChatBubble extends StatelessWidget {
           SecurityIcon(status: securityStatus, size: 14),
           const SizedBox(width: 8),
         ],
+        if (isSent && burn) ...[burnMark, const SizedBox(width: 4)],
         Flexible(
           child: Container(
             constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.7),
@@ -71,6 +80,7 @@ class ChatBubble extends StatelessWidget {
             ),
           ),
         ),
+        if (!isSent && burn) ...[const SizedBox(width: 4), burnMark],
         if (isSent && status != null) ...[
           const SizedBox(width: 4),
           Tooltip(message: tooltip, child: Icon(icon, size: 12, color: color)),
@@ -102,6 +112,7 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<String>? _subscription;
   List<ChatMessage> _messages = [];
   late bool _verified = widget.contact.isVerified;
+  late bool _burn = widget.contact.burnAfterRead;
   bool _isLoading = true;
   bool _reloading = false;
   bool _reloadAgain = false;
@@ -122,6 +133,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     unawaited(_subscription?.cancel());
+    // 离开聊天时，读过的阅后即焚消息从本机删除
+    unawaited(_messaging.purgeBurned(sessionId: _sessionId).then<void>((_) {}, onError: (_) {}));
     _textController.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -148,6 +161,15 @@ class _ChatScreenState extends State<ChatScreen> {
           _messages = messages;
           _isLoading = false;
         });
+        // 消息已经显示在屏幕上，算读过；阅后即焚的会通知对方删除
+        if (messages.any((message) => !message.isSent)) {
+          try {
+            await _messaging.markRead(widget.contact);
+          } catch (_) {
+            // 标记失败不影响显示，下次刷新再试
+          }
+          if (!mounted) return;
+        }
       } while (_reloadAgain);
     } finally {
       _reloading = false;
@@ -160,7 +182,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _textController.clear();
     _focusNode.requestFocus();
     try {
-      await _messaging.sendText(widget.contact, text);
+      await _messaging.sendText(widget.contact, text, burn: _burn);
     } on ArgumentError {
       _textController.text = text;
       _toast('消息太长了（上限约 ${MessageCodec.maxTextBytes ~/ 1024} KB），请分几条发。');
@@ -214,6 +236,20 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) setState(() => _verified = verified);
   }
 
+  Future<void> _toggleBurn() async {
+    final enabled = !_burn;
+    await ContactStore.updateContactBurnAfterRead(widget.contact.deviceId, enabled);
+    if (!mounted) return;
+    setState(() => _burn = enabled);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          enabled ? '阅后即焚已开启：之后你发出的消息，对方读过后两边都会删除。' : '阅后即焚已关闭。已经发出的阅后即焚消息不受影响。',
+        ),
+      ),
+    );
+  }
+
   String get _linkText {
     switch (_messaging.linkState(_sessionId)) {
       case SessionLinkState.connected:
@@ -249,6 +285,16 @@ class _ChatScreenState extends State<ChatScreen> {
         centerTitle: false,
         elevation: 0,
         backgroundColor: AppTheme.white,
+        actions: [
+          IconButton(
+            tooltip: _burn ? '关闭阅后即焚' : '开启阅后即焚',
+            icon: Icon(
+              _burn ? Icons.local_fire_department : Icons.local_fire_department_outlined,
+              color: _burn ? AppTheme.black : AppTheme.midGray,
+            ),
+            onPressed: () => unawaited(_toggleBurn()),
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(20),
           child: Container(
@@ -272,7 +318,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: Text(
-                    _verified ? '已验证' : '未验证',
+                    '${_verified ? '已验证' : '未验证'}${_burn ? ' · 阅后即焚' : ''}',
                     style: const TextStyle(color: AppTheme.midGray, fontSize: 11),
                   ),
                 ),
@@ -338,6 +384,7 @@ class _ChatScreenState extends State<ChatScreen> {
             isSent: message.isSent,
             status: message.status,
             securityStatus: _security,
+            burn: message.burn,
           ),
         );
       },

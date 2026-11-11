@@ -31,3 +31,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+# sqlite3 用带加密支持的 SQLite3 Multiple Ciphers 构建，本地数据库整库加密
+hooks:
+  user_defines:
+    sqlite3:
+      source: sqlite3mc

@@ -1,0 +1,5 @@
+lib/messaging/message_codec.dart
+lib/messaging/messaging_service.dart
+lib/storage/local_db.dart
+lib/storage/app_database.dart
+docs/message-format.md
