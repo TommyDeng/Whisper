@@ -76,6 +76,17 @@ class MessagingService {
   /// 某个会话有变化（新消息、状态、连接、对方在线）时发出它的 sessionId。
   Stream<String> get updates => _updates.stream;
 
+  /// 对方发来的通话信令（广播流）：发送方和信令正文（`ChatContent.call` 的 body，未校验）。
+  /// 信令不落库、不回回执。
+  Stream<({Contact contact, String body})> get callSignals => throw UnimplementedError();
+
+  /// 因对方不在线被中继丢弃的临时消息（广播流）：会话 ID 和消息 ID。
+  Stream<({String sessionId, String id})> get signalDropped => throw UnimplementedError();
+
+  /// 把一条通话信令加密后作为临时消息发给 [contact]：不落库、不排队、不重发。
+  /// 返回消息 ID；会话不存在或此刻没连上中继时返回 null（没有发出）。
+  Future<String?> sendCallSignal(Contact contact, String body) => throw UnimplementedError();
+
   /// 为所有已有会话的联系人建立连接。重复调用无效果。
   Future<void> start() async {
     if (_started) return;
