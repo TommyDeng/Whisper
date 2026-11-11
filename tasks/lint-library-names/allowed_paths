@@ -1,9 +1,0 @@
-lib/contact/contact.dart
-lib/direct_text/direct_text.dart
-lib/e2ee/e2ee.dart
-lib/files/files.dart
-lib/identity/identity.dart
-lib/lan_discovery/lan_discovery.dart
-lib/pairing/pairing.dart
-lib/storage/storage.dart
-lib/voice/voice.dart

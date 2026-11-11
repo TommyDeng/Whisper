@@ -64,11 +64,3 @@ spike/signaling/.dev.vars
 .metadata
 LIBWEBRTC_INSTALL.md
 TURN_TEST.ps1
-
-# agent-pipeline：worktree 与任务运行期产物（spec.md / allowed_paths / tier / accept.sh 入库）
-.worktrees/
-tasks/*/state.json
-tasks/*/prompt.md
-tasks/*/worker-last.md
-tasks/*/review.md
-tasks/*/*.log
