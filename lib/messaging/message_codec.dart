@@ -126,14 +126,35 @@ class MessageCodec {
         utf8.encode(content.body).length > maxTextBytes) {
       throw ArgumentError('消息过长');
     }
-    final json = utf8.encode(jsonEncode({
+    if (content.type == ChatContent.typeReceipt) {
+      final kind = content.receiptKind;
+      if (kind != ChatContent.receiptDelivered && kind != ChatContent.receiptRead) {
+        throw ArgumentError('不合法的回执种类');
+      }
+      final ids = content.ids;
+      if (ids.isEmpty) throw ArgumentError('回执必须至少包含一个消息 ID');
+      if (ids.length > ChatContent.maxReceiptIds) {
+        throw ArgumentError('回执包含的消息 ID 超过上限');
+      }
+      for (final id in ids) {
+        if (id.length > 64) throw ArgumentError('消息 ID 超过 64 个字符');
+      }
+    }
+    final jsonMap = <String, Object?>{
       't': content.type,
       'body': content.body,
       'ts': content.sentAt,
-    }));
-    final padded = Uint8List(((4 + json.length + paddingBlock - 1) ~/ paddingBlock) * paddingBlock);
-    ByteData.sublistView(padded).setUint32(0, json.length);
-    padded.setRange(4, 4 + json.length, json);
+    };
+    if (content.type == ChatContent.typeReceipt) {
+      jsonMap['kind'] = content.receiptKind;
+      jsonMap['ids'] = content.ids;
+    } else if (content.burn) {
+      jsonMap['burn'] = true;
+    }
+    final bytes = utf8.encode(jsonEncode(jsonMap));
+    final padded = Uint8List(((4 + bytes.length + paddingBlock - 1) ~/ paddingBlock) * paddingBlock);
+    ByteData.sublistView(padded).setUint32(0, bytes.length);
+    padded.setRange(4, 4 + bytes.length, bytes);
 
     final box = await _aead.encrypt(
       padded,
@@ -192,8 +213,32 @@ class MessageCodec {
       final body = json['body'];
       final sentAt = json['ts'];
       if (type is! String || body is! String || sentAt is! int) throw const FormatException();
-      return ChatContent(type: type, body: body, sentAt: sentAt);
-    } catch (_) {
+
+      final burn = json['burn'];
+      if (burn != null && burn is! bool) throw const MessageCodecException('bad-content');
+
+      if (type == ChatContent.typeReceipt) {
+        final kind = json['kind'];
+        final ids = json['ids'];
+        if (kind is! String) throw const MessageCodecException('bad-content');
+        if (ids is! List || ids.isEmpty || ids.length > ChatContent.maxReceiptIds) {
+          throw const MessageCodecException('bad-content');
+        }
+        for (final id in ids) {
+          if (id is! String || id.length > 64) throw const MessageCodecException('bad-content');
+        }
+        return ChatContent(
+          type: type,
+          body: body,
+          sentAt: sentAt,
+          receiptKind: kind,
+          ids: List<String>.from(ids),
+        );
+      }
+
+      return ChatContent(type: type, body: body, sentAt: sentAt, burn: burn == true);
+    } catch (e) {
+      if (e is MessageCodecException) rethrow;
       throw const MessageCodecException('bad-content');
     }
   }

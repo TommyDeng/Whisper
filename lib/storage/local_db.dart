@@ -112,6 +112,27 @@ class LocalDatabase {
     return db.delete('messages', where: 'sessionId = ?', whereArgs: [sessionId]);
   }
 
+  /// 标记某个会话里方向为 received、尚未读的消息为已读，返回本次新标记的消息 id 列表
+  static Future<List<String>> markSessionRead(String sessionId) async {
+    final db = await database;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final pending = await db.query(
+      'messages',
+      columns: ['msgId'],
+      where: 'sessionId = ? AND direction = ? AND read = 0',
+      whereArgs: [sessionId, 'received'],
+    );
+    final ids = pending.map((r) => r['msgId'] as String).toList();
+    if (ids.isEmpty) return [];
+    await db.update(
+      'messages',
+      {'read': 1, 'readAt': now},
+      where: 'sessionId = ? AND direction = ? AND read = 0',
+      whereArgs: [sessionId, 'received'],
+    );
+    return ids;
+  }
+
   /// 标记消息为已读
   static Future<void> markRead(String msgId) async {
     final db = await database;
@@ -121,6 +142,50 @@ class LocalDatabase {
       where: 'msgId = ?',
       whereArgs: [msgId],
     );
+  }
+
+  /// 插入一条待发回执到 outbox
+  static Future<void> insertOutbox({
+    required String msgId,
+    required String sessionId,
+    required String payload,
+    required int createdAt,
+  }) async {
+    final db = await database;
+    await db.insert(
+      'outbox',
+      {
+        'msgId': msgId,
+        'sessionId': sessionId,
+        'payload': payload,
+        'createdAt': createdAt,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// 按 id 删除 outbox 记录
+  static Future<int> deleteOutbox(String msgId) async {
+    final db = await database;
+    return db.delete('outbox', where: 'msgId = ?', whereArgs: [msgId]);
+  }
+
+  /// 查询某个会话的全部待发回执，按 createdAt, rowid 升序
+  static Future<List<Map<String, dynamic>>> queryOutbox(String sessionId) async {
+    final db = await database;
+    final results = await db.query(
+      'outbox',
+      where: 'sessionId = ?',
+      whereArgs: [sessionId],
+      orderBy: 'createdAt ASC, rowid ASC',
+    );
+    return results;
+  }
+
+  /// 删除某个会话的全部 outbox 记录
+  static Future<int> deleteOutboxForSession(String sessionId) async {
+    final db = await database;
+    return db.delete('outbox', where: 'sessionId = ?', whereArgs: [sessionId]);
   }
 
   /// 删除一条消息
@@ -143,6 +208,34 @@ class LocalDatabase {
       where: 'timestamp < ? AND burnAfterRead = 0',
       whereArgs: [cutoff],
     );
+  }
+
+  /// 删除已读的、收到的阅后即焚消息。
+  /// [sessionId] 为 null 时处理所有会话。返回被删除消息的 (msgId, sessionId) 列表。
+  static Future<List<Map<String, dynamic>>> deleteReadBurned({String? sessionId}) async {
+    final db = await database;
+    final clauses = <String>[];
+    final whereArgs = <Object?>[];
+    clauses.add('direction = ?');
+    whereArgs.add('received');
+    clauses.add('burnAfterRead = 1');
+    clauses.add('read = 1');
+    if (sessionId != null) {
+      clauses.add('sessionId = ?');
+      whereArgs.add(sessionId);
+    }
+    final affected = await db.query(
+      'messages',
+      columns: ['msgId', 'sessionId'],
+      where: clauses.join(' AND '),
+      whereArgs: whereArgs,
+    );
+    await db.delete(
+      'messages',
+      where: clauses.join(' AND '),
+      whereArgs: whereArgs,
+    );
+    return affected.cast<Map<String, dynamic>>();
   }
 
   /// 处理阅后即焚：如果消息开启 burnAfterRead 且已读，则删除
