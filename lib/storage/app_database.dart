@@ -13,7 +13,7 @@ import '../app_config.dart';
 class AppDatabase {
   AppDatabase._();
 
-  static const int schemaVersion = 3;
+  static const int schemaVersion = 4;
 
   static Future<Database>? _opening;
 
@@ -99,6 +99,15 @@ class AppDatabase {
       )
     ''');
     await _addColumnIfMissing(db, 'messages', 'relayed', 'INTEGER NOT NULL DEFAULT 0');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS outbox (
+        msgId TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        createdAt INTEGER NOT NULL
+      )
+    ''');
 
     await db.execute('''
       CREATE TABLE IF NOT EXISTS invites (
