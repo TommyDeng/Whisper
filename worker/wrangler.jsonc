@@ -1,9 +1,9 @@
 {
-  // Local WebRTC signaling spike. Do not deploy from this project:
-  // no routes, no workers_dev publish, no secrets.
+  // 耳语中继：会话密文中继（SessionDO）、配对（InviteDO），以及早期通话验证用的信令房间（RoomDO）。
+  // 线上域名 whisper.tommydeng.org；路由在部署时配置，这里不写，避免误发布。
   // Privacy (PRD §5): Workers Logs stay off so the platform does not
   // record client IPs. The Worker itself does not log SDP, candidates, or IPs.
-  "name": "whisper-webrtc-spike",
+  "name": "whisper-relay",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-02",
   "compatibility_flags": ["nodejs_compat"],
@@ -12,10 +12,13 @@
   },
   "durable_objects": {
     "bindings": [
-      { "name": "ROOMS", "class_name": "RoomDO" }
+      { "name": "ROOMS", "class_name": "RoomDO" },
+      { "name": "SESSIONS", "class_name": "SessionDO" },
+      { "name": "INVITES", "class_name": "InviteDO" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["RoomDO"] }
+    { "tag": "v1", "new_sqlite_classes": ["RoomDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["SessionDO", "InviteDO"] }
   ]
 }

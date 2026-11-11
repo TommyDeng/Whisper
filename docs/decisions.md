@@ -8,7 +8,7 @@
 |---|---|
 | 受众 | 仅亲友，不做陌生人社交；安全优先于功能 |
 | 形态 | 原生客户端（Flutter），首发 Windows + Linux；iOS / Android 后续；不做 Web 客户端 |
-| 中继 | Cloudflare 仅作密文中继与信令；域名 `chat.tommydeng.org` |
+| 中继 | Cloudflare 仅作密文中继与信令；域名 `whisper.tommydeng.org` |
 | MVP 会话 | 仅 1:1；群聊延后 |
 | MVP 身份 | 一台设备 = 一个身份；多设备延后 |
 | 邀请码 | 一次性、24 小时有效；对方使用后须邀请人手动批准 |

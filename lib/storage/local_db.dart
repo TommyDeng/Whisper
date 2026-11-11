@@ -6,51 +6,14 @@
 /// - 7 天自动删除旧消息
 /// - 阅后即焚：读取后删除
 
-import 'package:path/path.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
+
 import '../e2ee/message.dart';
+import 'app_database.dart';
 
-/// 本地数据库管理器（单例）
+/// 消息表的读写。数据库本身由 [AppDatabase] 打开和建表。
 class LocalDatabase {
-  static Database? _db;
-
-  static Future<Database> get database async {
-    if (_db != null) return _db!;
-    _db = await _initDb();
-    return _db!;
-  }
-
-  static Future<Database> _initDb() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final dbPath = join(docsDir.path, 'whisper.db');
-    return await openDatabase(
-      dbPath,
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE messages (
-            msgId TEXT PRIMARY KEY,
-            sessionId TEXT NOT NULL,
-            senderPublicKey TEXT NOT NULL,
-            ciphertext TEXT NOT NULL,
-            sequenceNumber INTEGER NOT NULL,
-            timestamp INTEGER NOT NULL,
-            direction TEXT NOT NULL,
-            delivered INTEGER NOT NULL DEFAULT 0,
-            read INTEGER NOT NULL DEFAULT 0,
-            burnAfterRead INTEGER NOT NULL DEFAULT 0,
-            readAt INTEGER
-          )
-        ''');
-        await db.execute('''
-          CREATE INDEX idx_messages_session ON messages(sessionId);
-          CREATE INDEX idx_messages_timestamp ON messages(timestamp);
-          CREATE INDEX idx_messages_delivered ON messages(delivered);
-        ''');
-      },
-    );
-  }
+  static Future<Database> get database => AppDatabase.database;
 
   /// 插入一条消息（已存在则替换）
   static Future<void> insertMessage(StoredMessage msg) async {
@@ -60,6 +23,24 @@ class LocalDatabase {
       msg.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  /// 插入一条消息；msgId 已存在时什么都不做并返回 false。
+  /// 收到的消息用它去重：中继在确认之前会重复投递同一条。
+  static Future<bool> insertMessageIfAbsent(StoredMessage msg) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      final existing = await txn.query(
+        'messages',
+        columns: ['msgId'],
+        where: 'msgId = ?',
+        whereArgs: [msg.msgId],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) return false;
+      await txn.insert('messages', msg.toMap());
+      return true;
+    });
   }
 
   /// 根据 msgId 查询一条消息
@@ -85,7 +66,7 @@ class LocalDatabase {
       'messages',
       where: 'sessionId = ?',
       whereArgs: [sessionId],
-      orderBy: 'timestamp ASC',
+      orderBy: 'timestamp ASC, rowid ASC',
       limit: limit,
     );
     return results.map((m) => StoredMessage.fromMap(m)).toList();
@@ -100,6 +81,35 @@ class LocalDatabase {
       where: 'msgId = ?',
       whereArgs: [msgId],
     );
+  }
+
+  /// 标记消息已被中继收下（`stored`）
+  static Future<void> markRelayed(String msgId) async {
+    final db = await database;
+    await db.update(
+      'messages',
+      {'relayed': 1},
+      where: 'msgId = ?',
+      whereArgs: [msgId],
+    );
+  }
+
+  /// 某个会话里自己发出、但中继还没确认收下的消息（重启后需要重发）
+  static Future<List<StoredMessage>> getUnrelayedMessages(String sessionId) async {
+    final db = await database;
+    final results = await db.query(
+      'messages',
+      where: 'sessionId = ? AND direction = ? AND relayed = 0 AND delivered = 0',
+      whereArgs: [sessionId, 'sent'],
+      orderBy: 'timestamp ASC, rowid ASC',
+    );
+    return results.map((m) => StoredMessage.fromMap(m)).toList();
+  }
+
+  /// 删除一个会话的全部消息
+  static Future<int> deleteSessionMessages(String sessionId) async {
+    final db = await database;
+    return db.delete('messages', where: 'sessionId = ?', whereArgs: [sessionId]);
   }
 
   /// 标记消息为已读
@@ -155,11 +165,5 @@ class LocalDatabase {
   }
 
   /// 关闭数据库
-  static Future<void> close() async {
-    final db = _db;
-    if (db != null) {
-      await db.close();
-      _db = null;
-    }
-  }
+  static Future<void> close() => AppDatabase.close();
 }

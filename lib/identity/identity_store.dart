@@ -31,12 +31,16 @@ class IdentityKeyPair {
 
 /// 身份存储：私钥存于系统安全存储（Windows DPAPI / Linux libsecret）。
 class IdentityStore {
-  IdentityStore({FlutterSecureStorage? storage}) : _storage = storage ?? const FlutterSecureStorage();
+  /// [profile] 非空时密钥名带上后缀，同一个系统账号下可以并存多个身份（本地联调用）。
+  IdentityStore({FlutterSecureStorage? storage, String profile = ''})
+      : _storage = storage ?? const FlutterSecureStorage(),
+        _suffix = profile.isEmpty ? '' : '.$profile';
 
   final FlutterSecureStorage _storage;
+  final String _suffix;
 
-  static const _x25519PrivateKeyKey = 'x25519_private_key';
-  static const _ed25519PrivateKeyKey = 'ed25519_private_key';
+  String get _x25519PrivateKeyKey => 'x25519_private_key$_suffix';
+  String get _ed25519PrivateKeyKey => 'ed25519_private_key$_suffix';
 
   /// 从安全存储加载身份密钥对，如果不存在则返回 null。
   Future<IdentityKeyPair?> load() async {

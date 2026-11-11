@@ -1,6 +1,39 @@
 import { ROOM_CODE } from "./protocol";
+import { INVITE_KEY, RELAY_ID } from "./relay_limits";
 
 export { RoomDO } from "./room";
+export { SessionDO } from "./session";
+export { InviteDO } from "./invite";
+
+function bad(error: string, status = 400): Response {
+  return Response.json({ ok: false, error }, { status, headers: { "cache-control": "no-store" } });
+}
+
+/** 会话中继与配对的入口校验；通过后交给对应的 Durable Object。协议见 docs/relay-protocol.md。 */
+function routeRelay(request: Request, env: Env, url: URL): Response | Promise<Response> | null {
+  const match = /^\/(session|invite)\/([^/]+)$/.exec(url.pathname);
+  if (!match) return null;
+  const kind = match[1];
+  const id = match[2];
+  if (!RELAY_ID.test(id)) {
+    return bad(kind === "session" ? "bad-session-id" : "bad-invite-id");
+  }
+  if (kind === "session") {
+    const peer = url.searchParams.get("peer");
+    if (peer !== "a" && peer !== "b") return bad("bad-peer");
+  } else {
+    const role = url.searchParams.get("role");
+    if (role !== "inviter" && role !== "joiner") return bad("bad-role");
+    if (!INVITE_KEY.test(url.searchParams.get("key") ?? "")) return bad("bad-key");
+  }
+  if (request.headers.get("Upgrade") !== "websocket") {
+    return new Response("expected websocket", { status: 426 });
+  }
+  if (kind === "session") {
+    return env.SESSIONS.get(env.SESSIONS.idFromName(id)).fetch(request);
+  }
+  return env.INVITES.get(env.INVITES.idFromName(id)).fetch(request);
+}
 
 function issueTurnCredentials(env: Env) {
   const envAny = env as unknown as { TURN_URLS?: string; TURN_SECRET?: string };
@@ -44,6 +77,9 @@ export default {
         { headers: { "cache-control": "no-store" } },
       );
     }
+
+    const relay = routeRelay(request, env, url);
+    if (relay) return relay;
 
     const match = /^\/ws\/([^/]+)$/.exec(url.pathname);
     if (!match) {

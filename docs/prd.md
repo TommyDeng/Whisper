@@ -1,6 +1,6 @@
 # 耳语（Whisper）产品需求文档（PRD）· Stage 1
 
-> 状态：草案 · 形态：原生客户端（Flutter），首发 Windows / Linux 桌面，后续 iOS / Android · 中继：`chat.tommydeng.org`（Cloudflare，仅转发密文）
+> 状态：草案 · 形态：原生客户端（Flutter），首发 Windows / Linux 桌面，后续 iOS / Android · 中继：`whisper.tommydeng.org`（Cloudflare，仅转发密文）
 
 ## 1. 产品定位
 耳语是一个**只给亲友使用**的私密通讯工具：端到端加密（E2EE）的文字聊天 + 低延迟实时语音。**安全优先于一切功能**。没有陌生人、没有随机匹配、没有多余社交功能，尽量少收集数据，不需要手机号或邮箱注册。
@@ -80,7 +80,7 @@ ZeroTier 只是**传输加速手段，绝不是安全边界**：无论走哪条�
 - [ ] 同时具备局域网/ZeroTier 与公网候选时，优先选中局域网/ZeroTier 路径。
 - [ ] 关闭 ZeroTier 后仍可通过 STUN/TURN 正常通话与聊天。
 - [ ] 所有路径下媒体与消息均为 E2EE（抓包验证）。
-- [ ] 中继部署于 `chat.tommydeng.org`（WSS），仅可见密文。
+- [ ] 中继部署于 `whisper.tommydeng.org`（WSS），仅可见密文。
 - [ ] GitHub Actions 自动构建 Windows / Linux 产物；Release 附 `SHA256SUMS` 与 GPG 签名 `SHA256SUMS.asc`，可按文档验证。
 - [ ] 未签名的 Windows 安装包可按文档（SmartScreen“更多信息 → 仍要运行”）完成安装。
 - [ ] 所有改动经 PR 并由所有者批准合并。
