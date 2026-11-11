@@ -1,29 +1,35 @@
 #!/usr/bin/env bash
-# 功能门禁：在任务 worktree 中运行静态分析、测试和任务自带的 accept.sh。
+# 功能门禁：在任务 worktree 中运行项目检查（agent.conf）和任务自带的 accept.sh。
 # 用法: gates/functional.sh <task-id>    退出码 0=通过
 source "$(dirname "$0")/../scripts/agent/lib.sh"
+load_conf
 task_init "${1:-}"
 require_task
 
 BASE="$(state_get base)"
 cd "$WT"
 
-echo "== flutter analyze (lib test) =="
-# info 级问题不阻断（仓库基线里已有）；error/warning 阻断
-flutter analyze --no-fatal-infos lib test
+(( ${#CHECKS[@]} )) || [[ -f "$TASK_DIR/accept.sh" ]] || { echo "agent.conf 的 CHECKS 为空，任务也没有 accept.sh：没有任何检查可跑" >&2; exit 1; }
 
-echo "== flutter test =="
-flutter test
+run_check() {
+  echo "== $1 =="
+  bash -euo pipefail -c "$1"
+}
 
-# 只有改到 worker/ 才跑信令服务的检查
-if git -C "$ROOT" diff --name-only "$BASE" "$BRANCH" | grep -q '^worker/'; then
-  echo "== worker: typecheck + test =="
-  ( cd worker
-    [[ -d node_modules ]] || npm ci
-    npx wrangler types
-    npm run typecheck
-    npm test )
-fi
+for check in "${CHECKS[@]}"; do
+  run_check "$check"
+done
+
+# 条件检查：只有改到匹配路径时才跑。格式 '<路径正则> => <命令>'
+CHANGED="$(git -C "$ROOT" diff --name-only "$BASE" "$BRANCH")"
+for entry in "${CONDITIONAL_CHECKS[@]}"; do
+  pattern="${entry%% => *}"
+  command="${entry#* => }"
+  [[ "$pattern" != "$entry" ]] || { echo "CONDITIONAL_CHECKS 格式不对（应为 '<路径正则> => <命令>'）: $entry" >&2; exit 1; }
+  if grep -qE "$pattern" <<< "$CHANGED"; then
+    run_check "$command"
+  fi
+done
 
 # 任务特有验收：使用主检出里的 accept.sh（下级改不到），在 worktree 中执行
 if [[ -f "$TASK_DIR/accept.sh" ]]; then

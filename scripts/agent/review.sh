@@ -14,7 +14,7 @@ done
 BASE="$(state_get base)"
 cd "$WT"
 codex exec review --base "$BASE" "${MODEL_ARGS[@]}" \
-  "对照下面的任务说明审查这份改动。重点：与说明不符之处、过度实现、安全问题、被削弱或绕过的测试。逐条给出 文件:行号 + 问题 + 严重程度。
+  "对照下面的任务说明审查这份改动。重点：与说明不符之处、说明里没有要求的行为、过度实现、安全问题、被削弱或绕过的测试。逐条给出 文件:行号 + 问题 + 严重程度。
 
 $(cat "$TASK_DIR/spec.md")" > "$TASK_DIR/review.md" 2> "$TASK_DIR/review.log"
 echo "审查意见: tasks/$TASK_ID/review.md"
