@@ -31,9 +31,10 @@
 
 - `fileId` 不合格：`400 bad-file-id`。`index` 不合格（非数字、前导零、超过 127）：`400 bad-chunk-index`。这两项对三个方法都适用（`DELETE` 没有 index）。
 - 上传的块最大 `1048576 + 16` 字节。超过：`413 chunk-too-large`，且不得把超限内容写入存储。空请求体：`400 empty-chunk`。
-- 同一块已存在时再上传：`409 chunk-exists`，不覆盖原内容（客户端续传时把 409 当作已完成）。
-- 过期：每块记录上传时间；上传超过 7 天的块，`GET` 时按不存在处理（`404 not-found`）并删除。时间判断复用 `worker/src/relay_limits.ts` 的 `isExpired`。
-- `/file/` 下其它方法：`405 method-not-allowed`。
+- 同一块已存在时再上传：`409 chunk-exists`，不覆盖原内容（客户端续传时把 409 当作已完成）。判断和写入是一步完成的，并发上传同一块时只有一个成功。已存在的块如果已经过期，按不存在处理：用新内容替换，返回 `201`。
+- 过期：上传时间取 R2 对象自带的 `uploaded`（客户端改不了）；上传超过 7 天的块，`GET` 时按不存在处理（`404 not-found`）并删除。时间判断复用 `worker/src/relay_limits.ts` 的 `isExpired`。
+- 校验顺序：先 `fileId`，再 `index`，最后方法。方法与路径不匹配（`/file/<fileId>` 上不是 `DELETE`，`/file/<fileId>/<index>` 上不是 `PUT`/`GET`）：`405 method-not-allowed`。
+- `/file/` 下其它形状的路径（如 `/file/`、`/file/a/b/c`）不属于本接口，走入口原有的 `404`。
 - 所有响应带 `cache-control: no-store`。错误体统一为 `{"ok":false,"error":"<代码>"}`。
 - 不记录任何请求信息（路径、`fileId`、大小、IP）。
 
@@ -87,6 +88,7 @@ class FileCipherException implements Exception { ... }
 class FileReceiver {
   /// 临时文件是 `<target>.part`。它已存在时接着写（断点续传）：
   /// 已有长度必须是 chunkSize 的整数倍且小于 size，否则删掉从头开始。
+  /// size 为负或超过 maxFileBytes、hash 不是 32 字节：抛 ArgumentError（这两个值来自对方，不可信）。
   static Future<FileReceiver> open({
     required File target,
     required FileKeys keys,
@@ -99,7 +101,9 @@ class FileReceiver {
   int get chunkCount;
 
   /// 解密并追加一块。index 必须等于 nextIndex，否则抛 StateError。
-  /// 认证失败抛 FileCipherException，且不写入、nextIndex 不变（调用方可以重新下载这一块）。
+  /// 所有块都写完后再调用也抛 StateError。
+  /// 认证失败，或解出的明文长度不对（非末块必须正好 chunkSize，末块必须等于剩余长度）：
+  /// 抛 FileCipherException，且不写入、nextIndex 不变（调用方可以重新下载这一块）。
   Future<void> addChunk(int index, Uint8List sealed);
 
   /// 所有块写完后调用：校验总长度和整文件哈希，通过则把临时文件改名为 target 并返回它。
@@ -108,6 +112,9 @@ class FileReceiver {
 
   /// 放弃：关闭并删除临时文件。
   Future<void> abort();
+
+  // finish 或 abort 之后再调用任何方法抛 StateError；
+  // 上一个 addChunk / finish 还没完成时并发调用也抛 StateError。
 }
 ```
 
@@ -116,3 +123,8 @@ class FileReceiver {
 - 任何时候内存里最多只有一个块，不把整个文件读进内存（`hashFile` 和 `finish` 的校验也要流式）。
 - 测试覆盖：空文件、不足一块、正好一块、多块且末块不满；密文块长度；改动一个字节、调换两块、把非末块当末块（截断）都会失败；续传（写一部分后重新 `open`，`nextIndex` 正确，最后内容一致）；哈希不符时 `finish` 失败并删除临时文件；`FileKeys` 长度校验。测试里的文件放临时目录并清理，多块测试用 2–3 MiB 的文件即可。
 - 完成标准：`flutter analyze --no-fatal-infos lib test` 没有新增问题（基线 18 条 info），`flutter test` 全过（现有 245 个测试不能少、不能改）。
+
+留给后续任务的两点：
+
+- `maxFileBytes` 在发送端由调用方检查（`sealChunk` 和 `chunkCount` 不查上限）。
+- `FileReceiver` 还没有“关闭但保留临时文件”的方法，做暂停/续传时要补一个 `close()`。另外，文件大小是 `chunkSize` 整数倍、块都写完但还没 `finish` 就中断时，临时文件长度等于 `size`，重新 `open` 会删掉重下；到时一并决定要不要改成直接进入待 `finish` 状态。

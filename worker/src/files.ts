@@ -74,6 +74,7 @@ async function getChunk(bucket: R2Bucket, key: string, nowMs: number): Promise<R
   const object = await bucket.get(key);
   if (!object) return fail("not-found", 404);
   if (isExpired(object.uploaded.getTime(), nowMs)) {
+    await object.body.cancel();
     await bucket.delete(key);
     return fail("not-found", 404);
   }
