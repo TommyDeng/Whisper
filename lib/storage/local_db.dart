@@ -338,6 +338,30 @@ class LocalDatabase {
     return affected.cast<Map<String, dynamic>>();
   }
 
+  /// 记下一条文件消息对应的本地文件路径（发出的是源文件，收到的是保存位置）。
+  /// 消息已经不在了（刚好被删）时不记。
+  static Future<void> setFilePath(String msgId, String localPath) async {
+    final db = await database;
+    await db.rawInsert(
+      'INSERT OR REPLACE INTO file_transfers (msgId, localPath, updatedAt) '
+      'SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM messages WHERE msgId = ?)',
+      [msgId, localPath, DateTime.now().millisecondsSinceEpoch, msgId],
+    );
+  }
+
+  /// 一个会话里各条文件消息的本地文件路径：msgId → 路径。
+  static Future<Map<String, String>> getFilePaths(String sessionId) async {
+    final db = await database;
+    final rows = await db.rawQuery(
+      'SELECT f.msgId, f.localPath FROM file_transfers f '
+      'JOIN messages m ON m.msgId = f.msgId WHERE m.sessionId = ?',
+      [sessionId],
+    );
+    return {
+      for (final row in rows) row['msgId'] as String: row['localPath'] as String,
+    };
+  }
+
   /// 处理阅后即焚：如果消息开启 burnAfterRead 且已读，则删除
   static Future<void> handleBurnAfterRead(StoredMessage msg) async {
     if (msg.burnAfterRead && msg.read) {

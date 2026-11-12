@@ -177,7 +177,9 @@ class FileReceiver {
   ) : chunkCount = FileCipher.chunkCount(_size);
 
   /// 临时文件是 `<target>.part`。它已存在时接着写（断点续传）：
-  /// 已有长度必须是 chunkSize 的整数倍且小于 size，否则删掉从头开始。
+  /// 已有长度是 chunkSize 的整数倍且小于 size 时从下一块接着写；
+  /// 等于 size（且 size 大于 0）时所有块都已写完，可以直接 [finish]；
+  /// 其它情况删掉从头开始。
   static Future<FileReceiver> open({
     required File target,
     required FileKeys keys,
@@ -194,7 +196,9 @@ class FileReceiver {
     var nextIndex = 0;
     if (await part.exists()) {
       final existing = await part.length();
-      if (existing % FileCipher.chunkSize == 0 && existing < size) {
+      if (existing == size && size > 0) {
+        nextIndex = FileCipher.chunkCount(size);
+      } else if (existing % FileCipher.chunkSize == 0 && existing < size) {
         nextIndex = existing ~/ FileCipher.chunkSize;
       } else {
         await part.delete();
@@ -272,6 +276,13 @@ class FileReceiver {
         }
         return _part.rename(target.path);
       });
+
+  /// 暂停：关闭但保留临时文件，之后可以重新 [open] 续传。
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    await _raf.close();
+  }
 
   /// 放弃：关闭并删除临时文件。
   Future<void> abort() async {

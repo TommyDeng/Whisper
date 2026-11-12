@@ -9,6 +9,7 @@ import 'package:cryptography/cryptography.dart';
 
 import '../contact/contact.dart';
 import '../e2ee/message.dart';
+import '../files/file_offer.dart';
 import '../identity/identity_store.dart';
 import '../relay/relay_transport.dart';
 import '../relay/session_client.dart';
@@ -25,6 +26,7 @@ class ChatMessage {
     required this.isSent,
     required this.timestamp,
     required this.text,
+    this.file,
     this.status,
     this.burn = false,
   });
@@ -33,8 +35,11 @@ class ChatMessage {
   final bool isSent;
   final int timestamp;
 
-  /// 正文。解不开（例如身份已重置）时为 null。
+  /// 正文。文件消息或解不开（例如身份已重置）时为 null。
   final String? text;
+
+  /// 文件消息的文件描述；其它消息为 null。
+  final FileOffer? file;
 
   /// 仅自己发出的消息有。
   final OutgoingStatus? status;
@@ -42,6 +47,8 @@ class ChatMessage {
   /// 阅后即焚的消息。
   final bool burn;
 }
+
+typedef _Plain = ({String? text, FileOffer? file});
 
 class _Session {
   _Session(this.contact, this.client, this.key);
@@ -68,7 +75,7 @@ class MessagingService {
   final List<Duration>? backoff;
 
   final Map<String, _Session> _sessions = {}; // 以 sessionId 为键
-  final Map<String, String> _plaintext = {}; // msgId → 正文
+  final Map<String, _Plain> _plaintext = {}; // msgId → 解密后的内容
   final Set<String> _failed = {};
   final _updates = StreamController<String>.broadcast();
   final _callSignalsController =
@@ -207,17 +214,38 @@ class MessagingService {
   /// 发送一条文本。先落库再交给中继；离线时留在待发队列里，连上后自动发出。
   /// [burn] 为 true 时这条消息是阅后即焚的：对方读过之后两边都删除。
   Future<void> sendText(Contact contact, String text, {bool burn = false}) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _send(
+      contact,
+      ChatContent.text(text, sentAt: now, burn: burn),
+      (text: text, file: null),
+    );
+  }
+
+  /// 发送一条文件消息（文件本身已经传到中继上），返回消息 ID。
+  /// 和文本一样先落库再交给中继。文件消息不支持阅后即焚。
+  Future<String> sendFile(Contact contact, FileOffer offer) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return _send(
+      contact,
+      ChatContent.file(offer.encode(), sentAt: now),
+      (text: null, file: offer),
+    );
+  }
+
+  Future<String> _send(Contact contact, ChatContent content, _Plain plain) async {
+    final burn = content.burn;
+    final now = content.sentAt;
     final session = _sessions[contact.sessionId];
     if (session == null) throw StateError('联系人没有可用的会话');
     final me = await identity();
     final id = MessageCodec.newMessageId();
-    final now = DateTime.now().millisecondsSinceEpoch;
     final payload = await MessageCodec.seal(
       key: await session.key,
       sessionId: contact.sessionId,
       senderRole: contact.peerRole,
       messageId: id,
-      content: ChatContent.text(text, sentAt: now, burn: burn),
+      content: content,
     );
     await LocalDatabase.insertMessage(StoredMessage(
       msgId: id,
@@ -229,11 +257,12 @@ class MessagingService {
       direction: 'sent',
       burnAfterRead: burn,
     ));
-    _plaintext[id] = text;
+    _plaintext[id] = plain;
     await ContactStore.updateContactLastMessageTime(contact.deviceId, now);
     // 落库期间会话可能已被替换或关闭；新会话 attach 时会从库里捡起这条
     if (identical(_sessions[contact.sessionId], session)) session.client.send(id, payload);
     _notify(contact.sessionId);
+    return id;
   }
 
   /// 加密一条发给对方的回执，返回它的 id 和密文。
@@ -260,11 +289,13 @@ class MessagingService {
     final result = <ChatMessage>[];
     for (final message in stored) {
       final isSent = message.direction == 'sent';
+      final plain = await _read(contact, message);
       result.add(ChatMessage(
         id: message.msgId,
         isSent: isSent,
         timestamp: message.timestamp,
-        text: await _read(contact, message),
+        text: plain?.text,
+        file: plain?.file,
         status: isSent ? _status(message) : null,
         burn: message.burnAfterRead,
       ));
@@ -420,7 +451,20 @@ class MessagingService {
     );
   }
 
-  Future<String?> _read(Contact contact, StoredMessage message) async {
+  /// 文本或文件消息解密后的内容；其它类型和不合格的文件描述返回 null。
+  static _Plain? _plain(ChatContent content) {
+    if (content.type == ChatContent.typeText) return (text: content.body, file: null);
+    if (content.type == ChatContent.typeFile) {
+      try {
+        return (text: null, file: FileOffer.decode(content.body));
+      } on FormatException {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  Future<_Plain?> _read(Contact contact, StoredMessage message) async {
     final cached = _plaintext[message.msgId];
     if (cached != null) return cached;
     try {
@@ -432,8 +476,9 @@ class MessagingService {
         messageId: message.msgId,
         payload: message.ciphertext,
       );
-      if (content.type != ChatContent.typeText) return null;
-      return _plaintext[message.msgId] = content.body;
+      final plain = _plain(content);
+      if (plain == null) return null;
+      return _plaintext[message.msgId] = plain;
     } catch (_) {
       return null;
     }
@@ -470,7 +515,10 @@ class MessagingService {
       return;
     }
 
-    if (content.type != ChatContent.typeText) return;
+    // 文本和文件消息才进聊天记录；不认识的类型和不合格的文件描述丢弃（照常确认）。
+    final plain = _plain(content);
+    if (plain == null) return;
+    final isFile = plain.file != null;
 
     final inserted = await LocalDatabase.insertMessageIfAbsent(StoredMessage(
       msgId: message.id,
@@ -480,10 +528,10 @@ class MessagingService {
       sequenceNumber: 0,
       timestamp: message.ts,
       direction: 'received',
-      burnAfterRead: content.burn,
+      burnAfterRead: content.burn && !isFile, // 文件消息不支持阅后即焚
     ));
     if (!inserted) return;
-    _plaintext[message.id] = content.body;
+    _plaintext[message.id] = plain;
     await ContactStore.updateContactLastMessageTime(contact.deviceId, message.ts);
 
     // 只有新插入的消息才回 delivered 回执。先写 outbox 再发，重启也不会丢。

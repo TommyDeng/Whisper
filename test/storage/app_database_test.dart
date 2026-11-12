@@ -175,5 +175,7 @@ void main() {
     expect((await LocalDatabase.getSessionMessages('S')).single.relayed, isFalse);
     await SettingsStore.set('k', 'v');
     expect(await PendingInviteStore.loadActive(), isEmpty);
+    await LocalDatabase.setFilePath('m1', '/tmp/a.bin');
+    expect(await LocalDatabase.getFilePaths('S'), {'m1': '/tmp/a.bin'});
   });
 }

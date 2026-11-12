@@ -18,7 +18,7 @@ import 'db_encryption.dart';
 class AppDatabase {
   AppDatabase._();
 
-  static const int schemaVersion = 4;
+  static const int schemaVersion = 5;
 
   static Future<Database>? _opening;
 
@@ -165,6 +165,22 @@ class AppDatabase {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )
+    ''');
+
+    // 文件消息对应的本地文件路径。消息不管从哪条路径被删，这里的行都跟着删。
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS file_transfers (
+        msgId TEXT PRIMARY KEY,
+        localPath TEXT NOT NULL,
+        updatedAt INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS trg_messages_delete_file_transfer
+      AFTER DELETE ON messages
+      BEGIN
+        DELETE FROM file_transfers WHERE msgId = OLD.msgId;
+      END
     ''');
 
     const indexes = {
