@@ -9,10 +9,12 @@ import 'dart:async';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import 'app_config.dart';
+import 'call/call_audio.dart';
 import 'call/call_service.dart';
 import 'call/call_transport.dart';
 import 'call/webrtc_call_media.dart';
 import 'contact/contact.dart';
+import 'desktop/app_window.dart';
 import 'files/file_direct_link.dart';
 import 'files/file_direct_service.dart';
 import 'files/file_direct_transport.dart';
@@ -56,6 +58,9 @@ class AppServices {
   /// 当前窗口和打开的会话，供来信提示音使用。
   final uiFocus = UiFocus();
 
+  /// 关到托盘、托盘菜单、任务栏闪烁。
+  late final AppWindow window = AppWindow(uiFocus);
+
   /// 文件：双方在线时走 WebRTC 数据通道直传；离线或直连失败且用户确认后走中转。
   late final FileShareService files = FileShareService(
     messaging: messaging,
@@ -78,6 +83,10 @@ class AppServices {
   StreamSubscription<double>? _callMicLevelSubscription;
   final _callRenderers = StreamController<RTCVideoRenderer?>.broadcast();
   StreamSubscription<RTCVideoRenderer?>? _callRendererSubscription;
+  final _callLocalRenderers = StreamController<RTCVideoRenderer?>.broadcast();
+  StreamSubscription<RTCVideoRenderer?>? _callLocalRendererSubscription;
+  final _callAudioStats = StreamController<CallAudioStats>.broadcast();
+  StreamSubscription<CallAudioStats>? _callAudioStatsSubscription;
 
   /// 当前通话走的路径（局域网 / ZeroTier / 公网直连 / 中继）；新通话开始时先发一个 null。
   Stream<IcePathType?> get callPaths => _callPaths.stream;
@@ -87,6 +96,13 @@ class AppServices {
 
   /// 用于播放远端音频的隐藏渲染器；新通话开始或结束时发 null。
   Stream<RTCVideoRenderer?> get callRemoteRenderers => _callRenderers.stream;
+
+  /// 挂本端麦克风流的隐藏渲染器。
+  Stream<RTCVideoRenderer?> get callLocalRenderers =>
+      _callLocalRenderers.stream;
+
+  /// 通话收发电平与字节数，供通话条诊断。
+  Stream<CallAudioStats> get callAudioStats => _callAudioStats.stream;
 
   CallMedia _createCallMedia(Contact contact) {
     final media = WebRtcCallMedia(
@@ -100,12 +116,24 @@ class AppServices {
     unawaited(_callPathSubscription?.cancel());
     unawaited(_callMicLevelSubscription?.cancel());
     unawaited(_callRendererSubscription?.cancel());
+    unawaited(_callLocalRendererSubscription?.cancel());
+    unawaited(_callAudioStatsSubscription?.cancel());
     _callPaths.add(null);
     _callMicLevels.add(0);
     _callRenderers.add(null);
+    _callLocalRenderers.add(null);
+    _callAudioStats.add(const CallAudioStats());
     _callPathSubscription = media.paths.listen(_callPaths.add);
-    _callMicLevelSubscription = media.localAudioLevels.listen(_callMicLevels.add);
-    _callRendererSubscription = media.remoteRendererChanges.listen(_callRenderers.add);
+    _callMicLevelSubscription = media.localAudioLevels.listen(
+      _callMicLevels.add,
+    );
+    _callRendererSubscription = media.remoteRendererChanges.listen(
+      _callRenderers.add,
+    );
+    _callLocalRendererSubscription = media.localRendererChanges.listen(
+      _callLocalRenderers.add,
+    );
+    _callAudioStatsSubscription = media.audioStats.listen(_callAudioStats.add);
     return media;
   }
 

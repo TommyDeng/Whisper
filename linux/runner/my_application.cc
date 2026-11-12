@@ -10,6 +10,7 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* desktop_channel;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -19,9 +20,56 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
+// 新消息时让任务栏闪一下（X11 紧急提示）。Wayland 上可能没有效果。
+static void my_application_flash(MyApplication* self) {
+  GList* windows = gtk_application_get_windows(GTK_APPLICATION(self));
+  if (windows != nullptr) {
+    gtk_window_set_urgency_hint(GTK_WINDOW(windows->data), TRUE);
+  }
+}
+
+static void desktop_method_call_cb(FlMethodChannel* channel,
+                                   FlMethodCall* method_call,
+                                   gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  const gchar* method = fl_method_call_get_name(method_call);
+  g_autoptr(FlMethodResponse) response = nullptr;
+  if (g_strcmp0(method, "flash") == 0) {
+    my_application_flash(self);
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+  } else {
+    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+  g_autoptr(GError) error = nullptr;
+  if (!fl_method_call_respond(method_call, response, &error)) {
+    g_warning("Failed to send desktop channel response: %s", error->message);
+  }
+}
+
+static void my_application_register_desktop_channel(MyApplication* self,
+                                                    FlView* view) {
+  FlEngine* engine = fl_view_get_engine(view);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  self->desktop_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(engine), "whisper/desktop",
+      FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(
+      self->desktop_channel, desktop_method_call_cb, self, nullptr);
+}
+
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+
+  // 已经有窗口：第二次启动只把现有窗口请到前台（包括已关到托盘的）。
+  GList* existing = gtk_application_get_windows(GTK_APPLICATION(application));
+  if (existing != nullptr) {
+    GtkWindow* window = GTK_WINDOW(existing->data);
+    gtk_window_set_urgency_hint(window, FALSE);
+    gtk_window_present(window);
+    return;
+  }
+
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
@@ -74,6 +122,7 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  my_application_register_desktop_channel(self, view);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -121,6 +170,7 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_object(&self->desktop_channel);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
@@ -142,7 +192,13 @@ MyApplication* my_application_new() {
   // the application to be recognized beyond its binary name.
   g_set_prgname(APPLICATION_ID);
 
+  // 单实例：第二次启动走已有进程的 activate，把窗口请到前台。
+#ifdef G_APPLICATION_DEFAULT_FLAGS
+  const GApplicationFlags flags = G_APPLICATION_DEFAULT_FLAGS;
+#else
+  const GApplicationFlags flags = G_APPLICATION_FLAGS_NONE;
+#endif
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     flags, nullptr));
 }

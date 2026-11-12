@@ -8,27 +8,31 @@ import 'package:whisper/e2ee/message.dart';
 import 'package:whisper/storage/storage.dart';
 
 Contact _contact({String sessionId = 'S', String peerRole = 'a'}) => Contact(
-      deviceId: 'dev-1',
-      name: '小明',
-      x25519PublicKeyBase64: 'x',
-      ed25519PublicKeyBase64: 'e',
-      safetyCode: 'code',
-      isVerified: false,
-      createdAt: 1,
-      lastMessageTime: 2,
-      sessionId: sessionId,
-      peerRole: peerRole,
-    );
+  deviceId: 'dev-1',
+  name: '小明',
+  x25519PublicKeyBase64: 'x',
+  ed25519PublicKeyBase64: 'e',
+  safetyCode: 'code',
+  isVerified: false,
+  createdAt: 1,
+  lastMessageTime: 2,
+  sessionId: sessionId,
+  peerRole: peerRole,
+);
 
-StoredMessage _message(String id, {String direction = 'sent', int timestamp = 10}) => StoredMessage(
-      msgId: id,
-      sessionId: 'S',
-      senderPublicKey: 'x',
-      ciphertext: 'ct-$id',
-      sequenceNumber: 0,
-      timestamp: timestamp,
-      direction: direction,
-    );
+StoredMessage _message(
+  String id, {
+  String direction = 'sent',
+  int timestamp = 10,
+}) => StoredMessage(
+  msgId: id,
+  sessionId: 'S',
+  senderPublicKey: 'x',
+  ciphertext: 'ct-$id',
+  sequenceNumber: 0,
+  timestamp: timestamp,
+  direction: direction,
+);
 
 void main() {
   setUpAll(() {
@@ -74,8 +78,13 @@ void main() {
     test('未被中继确认的已发消息可以查出来，确认后不再出现', () async {
       await LocalDatabase.insertMessage(_message('m1', timestamp: 1));
       await LocalDatabase.insertMessage(_message('m2', timestamp: 2));
-      await LocalDatabase.insertMessage(_message('m3', direction: 'received', timestamp: 3));
-      expect((await LocalDatabase.getUnrelayedMessages('S')).map((m) => m.msgId), ['m1', 'm2']);
+      await LocalDatabase.insertMessage(
+        _message('m3', direction: 'received', timestamp: 3),
+      );
+      expect(
+        (await LocalDatabase.getUnrelayedMessages('S')).map((m) => m.msgId),
+        ['m1', 'm2'],
+      );
 
       await LocalDatabase.markRelayed('m1');
       await LocalDatabase.markDelivered('m2');
@@ -93,13 +102,31 @@ void main() {
 
     test('待完成的邀请：保存、读取、过期清理、删除', () async {
       await PendingInviteStore.save(
-        const PendingInvite(inviteId: 'i1', role: 'inviter', code: 'C1', expiry: 2000),
+        const PendingInvite(
+          inviteId: 'i1',
+          role: 'inviter',
+          code: 'C1',
+          expiry: 2000,
+        ),
       );
       await PendingInviteStore.save(
-        const PendingInvite(inviteId: 'i2', role: 'joiner', code: 'C2', expiry: 1000),
+        const PendingInvite(
+          inviteId: 'i2',
+          role: 'joiner',
+          code: 'C2',
+          expiry: 1000,
+        ),
       );
-      expect((await PendingInviteStore.loadActive(nowSeconds: 500)).map((i) => i.inviteId), ['i2', 'i1']);
-      expect((await PendingInviteStore.loadActive(nowSeconds: 1000)).map((i) => i.inviteId), ['i1']);
+      expect(
+        (await PendingInviteStore.loadActive(nowSeconds: 500))
+            .map((i) => i.inviteId),
+        ['i2', 'i1'],
+      );
+      expect(
+        (await PendingInviteStore.loadActive(nowSeconds: 1000))
+            .map((i) => i.inviteId),
+        ['i1'],
+      );
       await PendingInviteStore.remove('i1');
       expect(await PendingInviteStore.loadActive(nowSeconds: 500), isEmpty);
     });
@@ -172,10 +199,43 @@ void main() {
     expect(contact.hasSession, isFalse);
 
     await LocalDatabase.insertMessage(_message('m1'));
-    expect((await LocalDatabase.getSessionMessages('S')).single.relayed, isFalse);
+    expect(
+      (await LocalDatabase.getSessionMessages('S')).single.relayed,
+      isFalse,
+    );
     await SettingsStore.set('k', 'v');
     expect(await PendingInviteStore.loadActive(), isEmpty);
     await LocalDatabase.setFilePath('m1', '/tmp/a.bin');
     expect(await LocalDatabase.getFilePaths('S'), {'m1': '/tmp/a.bin'});
+  });
+
+  group('未读条数', () {
+    setUp(() async {
+      AppDatabase.useForTesting(
+        await AppDatabase.openAt(inMemoryDatabasePath, singleInstance: false),
+      );
+    });
+    tearDown(AppDatabase.close);
+
+    test('只统计收到且未读的消息，按会话分组', () async {
+      await LocalDatabase.insertMessage(_message('s1', direction: 'sent'));
+      await LocalDatabase.insertMessage(_message('r1', direction: 'received'));
+      await LocalDatabase.insertMessage(_message('r2', direction: 'received'));
+      await LocalDatabase.insertMessage(
+        StoredMessage(
+          msgId: 'r3',
+          sessionId: 'OTHER',
+          senderPublicKey: 'x',
+          ciphertext: 'ct-r3',
+          sequenceNumber: 0,
+          timestamp: 11,
+          direction: 'received',
+        ),
+      );
+      expect(await LocalDatabase.unreadCounts(), {'S': 2, 'OTHER': 1});
+
+      await LocalDatabase.markRead('r1');
+      expect(await LocalDatabase.unreadCounts(), {'S': 1, 'OTHER': 1});
+    });
   });
 }
