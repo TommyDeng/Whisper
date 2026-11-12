@@ -92,11 +92,14 @@ class LocalDatabase {
   }
 
   /// 某个会话里自己发出、但中继还没确认收下的消息（重启后需要重发）
-  static Future<List<StoredMessage>> getUnrelayedMessages(String sessionId) async {
+  static Future<List<StoredMessage>> getUnrelayedMessages(
+    String sessionId,
+  ) async {
     final db = await database;
     final results = await db.query(
       'messages',
-      where: 'sessionId = ? AND direction = ? AND relayed = 0 AND delivered = 0',
+      where:
+          'sessionId = ? AND direction = ? AND relayed = 0 AND delivered = 0',
       whereArgs: [sessionId, 'sent'],
       orderBy: 'timestamp ASC, rowid ASC',
     );
@@ -106,11 +109,29 @@ class LocalDatabase {
   /// 删除一个会话的全部消息
   static Future<int> deleteSessionMessages(String sessionId) async {
     final db = await database;
-    return db.delete('messages', where: 'sessionId = ?', whereArgs: [sessionId]);
+    return db.delete(
+      'messages',
+      where: 'sessionId = ?',
+      whereArgs: [sessionId],
+    );
+  }
+
+  /// 每个会话里收到但还没读的消息条数（含文件消息）。没有未读的会话不会出现在结果里。
+  static Future<Map<String, int>> unreadCounts() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+      "SELECT sessionId, COUNT(*) AS n FROM messages WHERE direction = 'received' AND read = 0 GROUP BY sessionId",
+    );
+    return {
+      for (final row in rows)
+        row['sessionId'] as String: (row['n'] as int?) ?? 0,
+    };
   }
 
   /// 某个会话里收到的、还没读的消息：`msgId` 和 `burnAfterRead`。
-  static Future<List<({String msgId, bool burn})>> getUnreadReceived(String sessionId) async {
+  static Future<List<({String msgId, bool burn})>> getUnreadReceived(
+    String sessionId,
+  ) async {
     final db = await database;
     final rows = await db.query(
       'messages',
@@ -121,7 +142,10 @@ class LocalDatabase {
     );
     return [
       for (final row in rows)
-        (msgId: row['msgId'] as String, burn: (row['burnAfterRead'] as int) != 0),
+        (
+          msgId: row['msgId'] as String,
+          burn: (row['burnAfterRead'] as int) != 0,
+        ),
     ];
   }
 
@@ -139,16 +163,18 @@ class LocalDatabase {
         await txn.update(
           'messages',
           {'read': 1, 'readAt': now},
-          where: 'sessionId = ? AND direction = ? AND read = 0 AND msgId IN (${_marks(chunk)})',
+          where:
+              'sessionId = ? AND direction = ? AND read = 0 AND msgId IN (${_marks(chunk)})',
           whereArgs: [sessionId, 'received', ...chunk],
         );
       }
       for (final receipt in receipts) {
-        await txn.insert(
-          'outbox',
-          {'msgId': receipt.msgId, 'sessionId': sessionId, 'payload': receipt.payload, 'createdAt': now},
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        await txn.insert('outbox', {
+          'msgId': receipt.msgId,
+          'sessionId': sessionId,
+          'payload': receipt.payload,
+          'createdAt': now,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -164,9 +190,15 @@ class LocalDatabase {
     return db.transaction((txn) async {
       final deleted = <String>[];
       for (final chunk in _chunks(msgIds)) {
-        final scope = 'sessionId = ? AND direction = ? AND msgId IN (${_marks(chunk)})';
+        final scope =
+            'sessionId = ? AND direction = ? AND msgId IN (${_marks(chunk)})';
         final args = [sessionId, 'sent', ...chunk];
-        await txn.update('messages', {'delivered': 1}, where: scope, whereArgs: args);
+        await txn.update(
+          'messages',
+          {'delivered': 1},
+          where: scope,
+          whereArgs: args,
+        );
         if (!deleteBurned) continue;
         final burned = await txn.query(
           'messages',
@@ -175,7 +207,11 @@ class LocalDatabase {
           whereArgs: args,
         );
         deleted.addAll(burned.map((row) => row['msgId'] as String));
-        await txn.delete('messages', where: '$scope AND burnAfterRead = 1', whereArgs: args);
+        await txn.delete(
+          'messages',
+          where: '$scope AND burnAfterRead = 1',
+          whereArgs: args,
+        );
       }
       return deleted;
     });
@@ -187,7 +223,8 @@ class LocalDatabase {
     }
   }
 
-  static String _marks(List<String> ids) => List.filled(ids.length, '?').join(',');
+  static String _marks(List<String> ids) =>
+      List.filled(ids.length, '?').join(',');
 
   /// 标记消息为已读
   static Future<void> markRead(String msgId) async {
@@ -208,16 +245,12 @@ class LocalDatabase {
     required int createdAt,
   }) async {
     final db = await database;
-    await db.insert(
-      'outbox',
-      {
-        'msgId': msgId,
-        'sessionId': sessionId,
-        'payload': payload,
-        'createdAt': createdAt,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert('outbox', {
+      'msgId': msgId,
+      'sessionId': sessionId,
+      'payload': payload,
+      'createdAt': createdAt,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   /// 按 id 删除 outbox 记录
@@ -227,7 +260,9 @@ class LocalDatabase {
   }
 
   /// 查询某个会话的全部待发回执，按 createdAt, rowid 升序
-  static Future<List<Map<String, dynamic>>> queryOutbox(String sessionId) async {
+  static Future<List<Map<String, dynamic>>> queryOutbox(
+    String sessionId,
+  ) async {
     final db = await database;
     final results = await db.query(
       'outbox',
@@ -247,16 +282,14 @@ class LocalDatabase {
   /// 删除一条消息
   static Future<void> deleteMessage(String msgId) async {
     final db = await database;
-    await db.delete(
-      'messages',
-      where: 'msgId = ?',
-      whereArgs: [msgId],
-    );
+    await db.delete('messages', where: 'msgId = ?', whereArgs: [msgId]);
   }
 
   /// 删除早于 [cutoff]（unix 毫秒）的消息（包括没读的和阅后即焚的）以及同样旧的待发回执。
   /// 返回被删除消息的 msgId 和 sessionId。
-  static Future<List<({String msgId, String sessionId})>> purgeExpired(int cutoff) async {
+  static Future<List<({String msgId, String sessionId})>> purgeExpired(
+    int cutoff,
+  ) async {
     final db = await database;
     return db.transaction((txn) async {
       final rows = await txn.query(
@@ -269,7 +302,10 @@ class LocalDatabase {
       await txn.delete('outbox', where: 'createdAt < ?', whereArgs: [cutoff]);
       return [
         for (final row in rows)
-          (msgId: row['msgId'] as String, sessionId: row['sessionId'] as String),
+          (
+            msgId: row['msgId'] as String,
+            sessionId: row['sessionId'] as String,
+          ),
       ];
     });
   }
@@ -293,8 +329,16 @@ class LocalDatabase {
           whereArgs: [entry.key, fromSessionId],
         );
       }
-      await txn.delete('messages', where: 'sessionId = ?', whereArgs: [fromSessionId]);
-      await txn.delete('outbox', where: 'sessionId = ?', whereArgs: [fromSessionId]);
+      await txn.delete(
+        'messages',
+        where: 'sessionId = ?',
+        whereArgs: [fromSessionId],
+      );
+      await txn.delete(
+        'outbox',
+        where: 'sessionId = ?',
+        whereArgs: [fromSessionId],
+      );
       await txn.update(
         'messages',
         {'relayed': 0},
@@ -312,7 +356,9 @@ class LocalDatabase {
 
   /// 删除已读的、收到的阅后即焚消息。
   /// [sessionId] 为 null 时处理所有会话。返回被删除消息的 (msgId, sessionId) 列表。
-  static Future<List<Map<String, dynamic>>> deleteReadBurned({String? sessionId}) async {
+  static Future<List<Map<String, dynamic>>> deleteReadBurned({
+    String? sessionId,
+  }) async {
     final db = await database;
     final clauses = <String>[];
     final whereArgs = <Object?>[];
@@ -358,7 +404,8 @@ class LocalDatabase {
       [sessionId],
     );
     return {
-      for (final row in rows) row['msgId'] as String: row['localPath'] as String,
+      for (final row in rows)
+        row['msgId'] as String: row['localPath'] as String,
     };
   }
 

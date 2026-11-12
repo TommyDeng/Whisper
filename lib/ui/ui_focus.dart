@@ -8,6 +8,9 @@ class UiFocus {
   /// 应用窗口是否在前台。由 [CallHost] 根据生命周期更新。
   bool windowFocused = true;
 
+  /// 窗口被关到托盘或最小化，用户看不见主界面。
+  bool windowHidden = false;
+
   void enterSession(String sessionId) => visibleSessionId = sessionId;
 
   void leaveSession(String sessionId) {

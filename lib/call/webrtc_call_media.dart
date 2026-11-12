@@ -26,12 +26,16 @@ class WebRtcCallMedia implements CallMedia {
   final _states = StreamController<CallMediaState>();
   final _paths = StreamController<IcePathType>.broadcast();
   final _levels = StreamController<double>.broadcast();
+  final _stats = StreamController<CallAudioStats>.broadcast();
   final _rendererChanges = StreamController<RTCVideoRenderer?>.broadcast();
+  final _localRendererChanges = StreamController<RTCVideoRenderer?>.broadcast();
 
   RTCPeerConnection? _pc;
   MediaStream? _local;
   final _remoteRenderer = RTCVideoRenderer();
+  final _localRenderer = RTCVideoRenderer();
   bool _remoteRendererReady = false;
+  bool _localRendererReady = false;
   Timer? _levelTimer;
   bool _muted = false;
   bool _closed = false;
@@ -53,16 +57,31 @@ class WebRtcCallMedia implements CallMedia {
   /// 本端麦克风电平（0.0–1.0），通话过程中周期性更新。
   Stream<double> get localAudioLevels => _levels.stream;
 
+  /// 本端发送 / 远端接收的电平和字节数，供通话条诊断。
+  Stream<CallAudioStats> get audioStats => _stats.stream;
+
   /// 用于播放远端音频的隐藏渲染器；初始化完成前为 null。
-  RTCVideoRenderer? get remoteRenderer => _remoteRendererReady ? _remoteRenderer : null;
+  RTCVideoRenderer? get remoteRenderer =>
+      _remoteRendererReady ? _remoteRenderer : null;
 
   /// 远端渲染器就绪或被释放。
-  Stream<RTCVideoRenderer?> get remoteRendererChanges => _rendererChanges.stream;
+  Stream<RTCVideoRenderer?> get remoteRendererChanges =>
+      _rendererChanges.stream;
+
+  /// 挂上本端麦克风流的隐藏渲染器。部分平台要有渲染器才会真正开始采集。
+  RTCVideoRenderer? get localRenderer =>
+      _localRendererReady ? _localRenderer : null;
+
+  Stream<RTCVideoRenderer?> get localRendererChanges =>
+      _localRendererChanges.stream;
 
   @override
   Future<String> createOffer() async {
     final pc = await _open();
-    final offer = await pc.createOffer({'offerToReceiveAudio': true, 'offerToReceiveVideo': false});
+    final offer = await pc.createOffer({
+      'offerToReceiveAudio': true,
+      'offerToReceiveVideo': false,
+    });
     await pc.setLocalDescription(offer);
     return offer.sdp!;
   }
@@ -85,7 +104,11 @@ class WebRtcCallMedia implements CallMedia {
   Future<void> addCandidate(CallCandidate candidate) async {
     try {
       await _pc?.addCandidate(
-        RTCIceCandidate(candidate.candidate, candidate.sdpMid, candidate.sdpMLineIndex),
+        RTCIceCandidate(
+          candidate.candidate,
+          candidate.sdpMid,
+          candidate.sdpMLineIndex,
+        ),
       );
     } catch (_) {
       // 个别候选加不进去不影响其它候选
@@ -95,7 +118,8 @@ class WebRtcCallMedia implements CallMedia {
   @override
   void setMuted(bool muted) {
     _muted = muted;
-    for (final track in _local?.getAudioTracks() ?? const <MediaStreamTrack>[]) {
+    for (final track
+        in _local?.getAudioTracks() ?? const <MediaStreamTrack>[]) {
       track.enabled = !muted;
     }
   }
@@ -125,19 +149,33 @@ class WebRtcCallMedia implements CallMedia {
         await _remoteRenderer.dispose();
       }
     } catch (_) {}
+    try {
+      _localRenderer.srcObject = null;
+      if (_localRendererReady) {
+        await _localRenderer.dispose();
+      }
+    } catch (_) {}
     _remoteRendererReady = false;
+    _localRendererReady = false;
     if (!_rendererChanges.isClosed) _rendererChanges.add(null);
+    if (!_localRendererChanges.isClosed) _localRendererChanges.add(null);
     await _candidates.close();
     await _states.close();
     await _paths.close();
     await _levels.close();
+    await _stats.close();
     await _rendererChanges.close();
+    await _localRendererChanges.close();
   }
 
   Future<RTCPeerConnection> _open() async {
     if (_closed) throw StateError('已关闭');
+    try {
+      await Helper.ensureAudioSession();
+    } catch (_) {}
+    final constraints = await _audioConstraints();
     final local = await navigator.mediaDevices.getUserMedia({
-      'audio': {'echoCancellation': true, 'noiseSuppression': true, 'autoGainControl': true},
+      'audio': constraints,
       'video': false,
     });
     if (_closed) {
@@ -146,8 +184,12 @@ class WebRtcCallMedia implements CallMedia {
     }
     _local = local;
     setMuted(_muted);
-    await _selectDefaultPlayout();
+    await _selectDefaultDevices();
     await _ensureRemoteRenderer();
+    await _ensureLocalRenderer();
+    if (_localRendererReady) {
+      _localRenderer.srcObject = local;
+    }
 
     final pc = await createPeerConnection(await loadConfig());
     if (_closed) {
@@ -159,7 +201,13 @@ class WebRtcCallMedia implements CallMedia {
     pc.onIceCandidate = (candidate) {
       final line = candidate.candidate;
       if (_closed || line == null || line.isEmpty) return;
-      _candidates.add(CallCandidate(line, sdpMid: candidate.sdpMid, sdpMLineIndex: candidate.sdpMLineIndex));
+      _candidates.add(
+        CallCandidate(
+          line,
+          sdpMid: candidate.sdpMid,
+          sdpMLineIndex: candidate.sdpMLineIndex,
+        ),
+      );
     };
     pc.onConnectionState = (state) {
       if (_closed) return;
@@ -187,9 +235,7 @@ class WebRtcCallMedia implements CallMedia {
     pc.onTrack = (event) {
       if (event.track.kind != 'audio') return;
       event.track.enabled = true;
-      if (event.streams.isNotEmpty && _remoteRendererReady) {
-        _remoteRenderer.srcObject = event.streams[0];
-      }
+      unawaited(_attachRemoteTrack(event));
     };
 
     for (final track in local.getAudioTracks()) {
@@ -214,21 +260,96 @@ class WebRtcCallMedia implements CallMedia {
     }
   }
 
+  Future<Map<String, dynamic>> _audioConstraints() async {
+    final audio = <String, dynamic>{
+      'echoCancellation': true,
+      'noiseSuppression': true,
+      'autoGainControl': true,
+    };
+    try {
+      final options = await _deviceOptions();
+      final inputId = pickDefaultRecordingDeviceId(options);
+      final outputId = pickDefaultPlayoutDeviceId(options);
+      // flutter_webrtc 桌面端：sourceId 选麦克风，deviceId 选扬声器（在 GetUserAudio 里调用 SetPlayoutDevice）。
+      if (inputId != null) audio['sourceId'] = inputId;
+      if (outputId != null) audio['deviceId'] = outputId;
+    } catch (_) {
+      // 枚举失败就走系统默认
+    }
+    return audio;
+  }
+
+  Future<List<AudioDeviceOption>> _deviceOptions() async {
+    final devices = await navigator.mediaDevices.enumerateDevices();
+    return [
+      for (final device in devices)
+        AudioDeviceOption(
+          deviceId: device.deviceId,
+          label: device.label,
+          kind: device.kind ?? '',
+        ),
+    ];
+  }
+
+  Future<void> _selectDefaultDevices() async {
+    await _selectDefaultRecording();
+    await _selectDefaultPlayout();
+  }
+
+  Future<void> _selectDefaultRecording() async {
+    try {
+      final id = pickDefaultRecordingDeviceId(await _deviceOptions());
+      if (id == null || _closed) return;
+      await Helper.selectAudioInput(id);
+    } catch (_) {
+      // 平台不支持或枚举为空时保持系统默认
+    }
+  }
+
   Future<void> _selectDefaultPlayout() async {
     try {
-      final devices = await navigator.mediaDevices.enumerateDevices();
-      final id = pickDefaultPlayoutDeviceId([
-        for (final device in devices)
-          AudioDeviceOption(
-            deviceId: device.deviceId,
-            label: device.label,
-            kind: device.kind ?? '',
-          ),
-      ]);
-      if (id == null || _closed) return;
+      final id =
+          pickDefaultPlayoutDeviceId(await _deviceOptions()) ?? 'default';
+      if (_closed) return;
       await Helper.selectAudioOutput(id);
     } catch (_) {
       // 本机或平台不支持选择输出设备时保持系统默认
+    }
+  }
+
+  Future<void> _attachRemoteTrack(RTCTrackEvent event) async {
+    try {
+      await Helper.ensureAudioSession();
+    } catch (_) {}
+    await _selectDefaultPlayout();
+    if (_closed || !_remoteRendererReady) return;
+    try {
+      if (event.streams.isNotEmpty) {
+        _remoteRenderer.srcObject = event.streams[0];
+        return;
+      }
+      // Unified Plan 偶发 streams 为空：自己建一条流把 track 挂上去，否则 Windows 可能完全不播。
+      final stream = await createLocalMediaStream('remote-audio');
+      if (_closed) return;
+      await stream.addTrack(event.track);
+      _remoteRenderer.srcObject = stream;
+    } catch (_) {
+      // 挂不上渲染器时仍继续通话
+    }
+  }
+
+  Future<void> _ensureLocalRenderer() async {
+    if (_localRendererReady || _closed) return;
+    try {
+      await _localRenderer.initialize();
+      if (_closed) {
+        await _localRenderer.dispose();
+        return;
+      }
+      _localRendererReady = true;
+      _localRendererChanges.add(_localRenderer);
+    } catch (_) {
+      // 没有本端渲染器时仍尝试采集
     }
   }
 
@@ -243,9 +364,24 @@ class WebRtcCallMedia implements CallMedia {
     try {
       final pc = _pc;
       if (pc == null || _closed) return;
-      final level = localAudioLevelFromStats(await pc.getStats());
-      if (level == null || _closed || _levels.isClosed) return;
-      _levels.add(_muted ? 0 : level);
+      final stats = callAudioStatsFromReports(await pc.getStats());
+      if (_closed || _levels.isClosed) return;
+      final level = _muted ? 0.0 : (stats.localLevel ?? 0);
+      _levels.add(level);
+      if (!_stats.isClosed) {
+        _stats.add(
+          _muted
+              ? CallAudioStats(
+                  localLevel: 0,
+                  bytesSent: stats.bytesSent,
+                  localEnergy: stats.localEnergy,
+                  remoteLevel: stats.remoteLevel,
+                  bytesReceived: stats.bytesReceived,
+                  remoteEnergy: stats.remoteEnergy,
+                )
+              : stats,
+        );
+      }
     } catch (_) {
       // 拿不到统计就不更新电平
     }
@@ -268,12 +404,12 @@ class WebRtcCallMedia implements CallMedia {
       }
       StatsReport? pair = pairId == null ? null : byId[pairId];
       pair ??= reports.cast<StatsReport?>().firstWhere(
-            (report) =>
-                report!.type == 'candidate-pair' &&
-                report.values['state'] == 'succeeded' &&
-                report.values['nominated'] == true,
-            orElse: () => null,
-          );
+        (report) =>
+            report!.type == 'candidate-pair' &&
+            report.values['state'] == 'succeeded' &&
+            report.values['nominated'] == true,
+        orElse: () => null,
+      );
       if (pair == null) return;
 
       final local = byId[pair.values['localCandidateId']];
@@ -304,7 +440,8 @@ IcePathType classifyPath({
   if (localType == 'relay' || remoteType == 'relay') return IcePathType.relay;
   if (zeroTierAddresses.contains(localAddress)) return IcePathType.zerotier;
   if (localType == 'host' && remoteType == 'host') return IcePathType.lan;
-  if (const {'host', 'srflx', 'prflx'}.contains(localType)) return IcePathType.srflx;
+  if (const {'host', 'srflx', 'prflx'}.contains(localType))
+    return IcePathType.srflx;
   return IcePathType.unknown;
 }
 

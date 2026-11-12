@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import 'app_theme.dart';
+import 'chat_images.dart';
 
 /// 下载前和下载失败时展示的说明。
 const String kOneTimeDownloadNotice = '一个文件只能成功下载一次，下载后中继上就删了。';
@@ -25,8 +26,7 @@ const String kSourceFileMissing = '源文件已不在原来的位置。';
 const String kDirectTransferNotice = '正在直传，请双方保持在线。文件不经服务器中转。';
 
 /// 收到直传请求时的说明。
-const String kDirectIncomingNotice =
-    '对方要向你发送一个文件。双方必须同时在线，文件走点对点直连，不会经过服务器中转。';
+const String kDirectIncomingNotice = '对方要向你发送一个文件。双方必须同时在线，文件走点对点直连，不会经过服务器中转。';
 
 /// 直传文件本地已经不在时的说明。
 const String kDirectLocalMissing = '本地文件已不在原来的位置。大文件不会存在服务器上，无法再次下载。';
@@ -124,7 +124,6 @@ Future<bool> confirmOverwrite(BuildContext context, String name) async {
   );
   return result ?? false;
 }
-
 
 /// 确认经服务器中转发送时的标题。
 const String kRelayConfirmTitle = '经服务器发送？';
@@ -332,10 +331,28 @@ class FileMessageBody extends StatelessWidget {
         !failed && downloadTotal != null && onCancelDownload != null;
     final saved = localPath != null && !localMissing && !downloading && !failed;
 
+    final showImage = saved && isImageFileName(name) && localPath != null;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (showImage) ...[
+          GestureDetector(
+            onTap: () => showChatImagePreview(context, localPath!),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: Image.file(
+                File(localPath!),
+                height: 160,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stack) =>
+                    const SizedBox.shrink(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [

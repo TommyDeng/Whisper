@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' hide MessageCodec;
 import 'package:path/path.dart' as p;
 
 import '../app_services.dart';
@@ -17,6 +18,7 @@ import '../messaging/message_codec.dart';
 import '../messaging/messaging_service.dart';
 import '../relay/session_client.dart';
 import 'app_theme.dart';
+import 'clipboard_image.dart';
 import 'file_transfer_ui.dart';
 
 /// 聊天气泡
@@ -272,6 +274,12 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     if (!mounted || path == null || path.isEmpty) return;
+    await _sendFileFromPath(path);
+  }
+
+  /// 把已有文件（选文件或粘贴的图片）按当前在线情况发出去。
+  Future<void> _sendFileFromPath(String path) async {
+    if (_burn) return;
     final file = File(path);
     int size;
     try {
@@ -287,6 +295,38 @@ class _ChatScreenState extends State<ChatScreen> {
       directAvailable: true,
     );
     await _followFilePlan(plan, file, size);
+  }
+
+  void _insertClipboardText(String value) {
+    final current = _textController;
+    final selection = current.selection;
+    final text = current.text;
+    final start = selection.isValid ? selection.start : text.length;
+    final end = selection.isValid ? selection.end : text.length;
+    final next = text.replaceRange(start, end, value);
+    current.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + value.length),
+    );
+  }
+
+  /// Ctrl+V：剪贴板是图片就当文件发（阅后即焚时不发文件），否则插入文字。
+  Future<void> _pasteIntoChat() async {
+    if (!_burn) {
+      try {
+        final file = await saveClipboardImage();
+        if (file != null) {
+          await _sendFileFromPath(file.path);
+          return;
+        }
+      } catch (_) {
+        // 读图失败时退回粘贴文字。
+      }
+    }
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) return;
+    _insertClipboardText(text);
   }
 
   Future<void> _followFilePlan(FileSendPlan plan, File file, int size) async {
@@ -329,7 +369,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final reason = state.error!;
     _files.cancel(state.id);
     if (!mounted) return;
-    final plan = planFileSend(size: size, peerOnline: false, directFailure: reason);
+    final plan = planFileSend(
+      size: size,
+      peerOnline: false,
+      directFailure: reason,
+    );
     await _followFilePlan(plan, file, size);
   }
 
@@ -617,30 +661,44 @@ class _ChatScreenState extends State<ChatScreen> {
                   onPressed: _burn ? null : () => unawaited(_sendFile()),
                 ),
                 Expanded(
-                  child: TextField(
-                    controller: _textController,
-                    focusNode: _focusNode,
-                    autofocus: true,
-                    decoration: InputDecoration(
-                      hintText: '输入消息...',
-                      hintStyle: const TextStyle(
-                        color: AppTheme.midGray,
-                        fontSize: 14,
+                  child: CallbackShortcuts(
+                    bindings: {
+                      const SingleActivator(
+                        LogicalKeyboardKey.keyV,
+                        control: true,
+                      ): () =>
+                          unawaited(_pasteIntoChat()),
+                      const SingleActivator(
+                        LogicalKeyboardKey.keyV,
+                        meta: true,
+                      ): () =>
+                          unawaited(_pasteIntoChat()),
+                    },
+                    child: TextField(
+                      controller: _textController,
+                      focusNode: _focusNode,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        hintText: '输入消息...',
+                        hintStyle: const TextStyle(
+                          color: AppTheme.midGray,
+                          fontSize: 14,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(20),
+                          borderSide: BorderSide.none,
+                        ),
+                        filled: true,
+                        fillColor: AppTheme.white,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
                       ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: BorderSide.none,
-                      ),
-                      filled: true,
-                      fillColor: AppTheme.white,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
+                      maxLines: 1,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => unawaited(_sendMessage()),
                     ),
-                    maxLines: 1,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => unawaited(_sendMessage()),
                   ),
                 ),
                 const SizedBox(width: 8),

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../app_services.dart';
+import '../call/call_audio.dart';
 import '../call/call_service.dart';
 import '../call/call_sound.dart';
 import '../call/message_sound.dart';
@@ -30,6 +31,8 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
   StreamSubscription<IcePathType?>? _paths;
   StreamSubscription<double>? _levels;
   StreamSubscription<RTCVideoRenderer?>? _renderers;
+  StreamSubscription<RTCVideoRenderer?>? _localRenderers;
+  StreamSubscription<CallAudioStats>? _audioStatsSub;
   StreamSubscription<({String sessionId, bool isFile})>? _incomingChat;
   StreamSubscription<String>? _incomingFiles;
   final _sounds = CallSound();
@@ -39,6 +42,8 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
   IcePathType? _path;
   double _micLevel = 0;
   RTCVideoRenderer? _remoteRenderer;
+  RTCVideoRenderer? _localRenderer;
+  CallAudioStats _audioStats = const CallAudioStats();
 
   @override
   void initState() {
@@ -54,10 +59,16 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
     _renderers = _services.callRemoteRenderers.listen((renderer) {
       if (mounted) setState(() => _remoteRenderer = renderer);
     });
-    _incomingChat = _services.messaging.incomingChat.listen((event) {
-      _maybeChime(event.sessionId);
+    _localRenderers = _services.callLocalRenderers.listen((renderer) {
+      if (mounted) setState(() => _localRenderer = renderer);
     });
-    _incomingFiles = _services.files.incomingArrivals.listen(_maybeChime);
+    _audioStatsSub = _services.callAudioStats.listen((stats) {
+      if (mounted) setState(() => _audioStats = stats);
+    });
+    _incomingChat = _services.messaging.incomingChat.listen((event) {
+      _onIncoming(event.sessionId);
+    });
+    _incomingFiles = _services.files.incomingArrivals.listen(_onIncoming);
     unawaited(_sounds.sync(_snapshot.phase));
   }
 
@@ -68,6 +79,8 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
     _paths?.cancel();
     _levels?.cancel();
     _renderers?.cancel();
+    _localRenderers?.cancel();
+    _audioStatsSub?.cancel();
     _incomingChat?.cancel();
     _incomingFiles?.cancel();
     _ticker?.cancel();
@@ -80,6 +93,11 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _services.uiFocus.windowFocused = state == AppLifecycleState.resumed;
+  }
+
+  void _onIncoming(String sessionId) {
+    _maybeChime(sessionId);
+    unawaited(_services.window.flashIfNeeded());
   }
 
   void _maybeChime(String sessionId) {
@@ -99,7 +117,8 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _snapshot = snapshot;
-      if (snapshot.phase == CallPhase.idle || snapshot.phase == CallPhase.incoming) {
+      if (snapshot.phase == CallPhase.idle ||
+          snapshot.phase == CallPhase.incoming) {
         _micLevel = 0;
       }
     });
@@ -122,14 +141,17 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
       final callId = snapshot.callId;
       _autoDismiss = Timer(const Duration(seconds: 3), () {
         final current = _services.calls.snapshot;
-        if (current.phase == CallPhase.ended && current.callId == callId) _services.calls.dismiss();
+        if (current.phase == CallPhase.ended && current.callId == callId)
+          _services.calls.dismiss();
       });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_snapshot.phase == CallPhase.idle && _remoteRenderer == null) {
+    if (_snapshot.phase == CallPhase.idle &&
+        _remoteRenderer == null &&
+        _localRenderer == null) {
       return widget.child;
     }
     return Stack(
@@ -137,7 +159,12 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
         Column(
           children: [
             if (_snapshot.phase != CallPhase.idle)
-              CallBar(snapshot: _snapshot, path: _path, micLevel: _micLevel),
+              CallBar(
+                snapshot: _snapshot,
+                path: _path,
+                micLevel: _micLevel,
+                audioStats: _audioStats,
+              ),
             Expanded(child: widget.child),
           ],
         ),
@@ -148,6 +175,14 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
             width: 1,
             height: 1,
             child: IgnorePointer(child: RTCVideoView(_remoteRenderer!)),
+          ),
+        if (_localRenderer != null)
+          Positioned(
+            left: 1,
+            top: 0,
+            width: 1,
+            height: 1,
+            child: IgnorePointer(child: RTCVideoView(_localRenderer!)),
           ),
       ],
     );
@@ -161,6 +196,7 @@ class CallBar extends StatelessWidget {
     required this.snapshot,
     required this.path,
     required this.micLevel,
+    this.audioStats = const CallAudioStats(),
     this.now,
   });
 
@@ -169,6 +205,9 @@ class CallBar extends StatelessWidget {
 
   /// 本端麦克风电平，0.0–1.0。静音或尚无采集时为 0。
   final double micLevel;
+
+  /// 收发字节与电平，显示在状态旁供两端对照。
+  final CallAudioStats audioStats;
 
   /// 用来算通话时长；为空则取当前时间。测试可传入固定值。
   final DateTime? now;
@@ -212,13 +251,34 @@ class CallBar extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       status,
-                      style: const TextStyle(color: AppTheme.darkGray, fontSize: 12),
+                      style: const TextStyle(
+                        color: AppTheme.darkGray,
+                        fontSize: 12,
+                      ),
                     ),
                     if (snapshot.phase == CallPhase.active && path != null) ...[
                       const SizedBox(height: 2),
                       Text(
                         '端到端加密 · ${callPathLabel(path!)}',
-                        style: const TextStyle(color: AppTheme.midGray, fontSize: 11),
+                        style: const TextStyle(
+                          color: AppTheme.midGray,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                    if (snapshot.phase == CallPhase.active ||
+                        snapshot.phase == CallPhase.connecting ||
+                        snapshot.phase == CallPhase.outgoing) ...[
+                      const SizedBox(height: 2),
+                      Tooltip(
+                        message: '本端↑是麦克风发出去的电平和字节，远端↓是收到对方的。用来判断是哪一侧没有声音。',
+                        child: Text(
+                          audioStats.compactLabel,
+                          style: const TextStyle(
+                            color: AppTheme.midGray,
+                            fontSize: 11,
+                          ),
+                        ),
                       ),
                     ],
                   ],
@@ -284,7 +344,12 @@ class CallBar extends StatelessWidget {
 }
 
 class _BarButton extends StatelessWidget {
-  const _BarButton({required this.label, required this.icon, required this.onPressed, this.filled});
+  const _BarButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.filled,
+  });
 
   final String label;
   final IconData icon;
@@ -303,7 +368,9 @@ class _BarButton extends StatelessWidget {
           Material(
             color: filled ?? AppTheme.white,
             shape: CircleBorder(
-              side: filled == null ? const BorderSide(color: AppTheme.lightGray) : BorderSide.none,
+              side: filled == null
+                  ? const BorderSide(color: AppTheme.lightGray)
+                  : BorderSide.none,
             ),
             child: InkWell(
               customBorder: const CircleBorder(),
@@ -311,12 +378,19 @@ class _BarButton extends StatelessWidget {
               child: SizedBox(
                 width: 36,
                 height: 36,
-                child: Icon(icon, color: filled == null ? AppTheme.black : AppTheme.white, size: 18),
+                child: Icon(
+                  icon,
+                  color: filled == null ? AppTheme.black : AppTheme.white,
+                  size: 18,
+                ),
               ),
             ),
           ),
           const SizedBox(height: 2),
-          Text(label, style: const TextStyle(color: AppTheme.darkGray, fontSize: 10)),
+          Text(
+            label,
+            style: const TextStyle(color: AppTheme.darkGray, fontSize: 10),
+          ),
         ],
       ),
     );
@@ -336,7 +410,9 @@ String callStatusText(CallSnapshot snapshot, DateTime now) {
       return '正在接通…';
     case CallPhase.active:
       final started = snapshot.connectedAt;
-      return started == null ? '通话中' : formatCallDuration(now.difference(started));
+      return started == null
+          ? '通话中'
+          : formatCallDuration(now.difference(started));
     case CallPhase.ended:
       return callEndText(snapshot.endReason);
   }
