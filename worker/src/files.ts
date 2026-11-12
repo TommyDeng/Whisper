@@ -1,6 +1,6 @@
 // 文件中转：密文分块暂存在 R2（绑定 FILES，对象名 `<fileId>/<index>`）。约定见 docs/file-relay.md。
 // 隐私：这里不记录任何请求信息（路径、fileId、大小、IP、凭据）。
-import { FILE_ID, MAX_CHUNK_INDEX, MAX_FILE_CHUNK_BYTES, RELAY_ID, isExpired } from "./relay_limits";
+import { FILE_ID, MAX_CHUNK_INDEX, MAX_FILE_CHUNK_BYTES, RELAY_ID, isExpired, parseSessionAuth } from "./relay_limits";
 import { authorizeSessionFile } from "./session";
 
 const NO_STORE = { "cache-control": "no-store" };
@@ -18,15 +18,6 @@ function parseChunkIndex(text: string): number | null {
   if (!/^(0|[1-9][0-9]{0,2})$/.test(text)) return null;
   const index = Number(text);
   return index <= MAX_CHUNK_INDEX ? index : null;
-}
-
-/** Authorization: Whisper <sessionId> <peer>；不合格返回 null。 */
-function parseFileAuth(request: Request): { sessionId: string; peer: "a" | "b" } | null {
-  const header = request.headers.get("authorization");
-  if (!header) return null;
-  const match = /^Whisper ([A-Za-z0-9_-]{22,64}) ([ab])$/.exec(header);
-  if (!match || !RELAY_ID.test(match[1])) return null;
-  return { sessionId: match[1], peer: match[2] as "a" | "b" };
 }
 
 function ownerKey(fileId: string): string {
@@ -229,7 +220,7 @@ export function handleFileRequest(
   if (!FILE_ID.test(fileId)) return fail("bad-file-id");
   if (indexText === undefined) {
     if (request.method !== "DELETE") return fail("method-not-allowed", 405);
-    const auth = parseFileAuth(request);
+    const auth = parseSessionAuth(request);
     if (!auth) return fail("unauthorized", 401);
     return deleteFile(env, fileId, auth.sessionId, nowMs);
   }
@@ -239,7 +230,7 @@ export function handleFileRequest(
     return fail("method-not-allowed", 405);
   }
 
-  const auth = parseFileAuth(request);
+  const auth = parseSessionAuth(request);
   if (!auth) return fail("unauthorized", 401);
 
   const key = `${fileId}/${index}`;

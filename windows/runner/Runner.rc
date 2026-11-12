@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "org.tommydeng" "\0"
-            VALUE "FileDescription", "whisper_webrtc_spike" "\0"
+            VALUE "FileDescription", "耳语 Whisper" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "whisper_webrtc_spike" "\0"
+            VALUE "InternalName", "whisper" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 org.tommydeng. All rights reserved." "\0"
-            VALUE "OriginalFilename", "whisper_webrtc_spike.exe" "\0"
-            VALUE "ProductName", "whisper_webrtc_spike" "\0"
+            VALUE "OriginalFilename", "whisper.exe" "\0"
+            VALUE "ProductName", "耳语 Whisper" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

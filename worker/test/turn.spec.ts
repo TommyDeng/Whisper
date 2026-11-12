@@ -2,7 +2,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { TURN_TTL_SECONDS, cleanIceServers, issueTurnCredentials } from "../src/turn";
-import { request } from "./helpers";
+import { connect, randomId, request } from "./helpers";
 
 const upstreamBody = {
   iceServers: [
@@ -116,12 +116,38 @@ describe("cleanIceServers", () => {
 });
 
 describe("GET /turn-credentials", () => {
+  function header(sessionId: string, peer: "a" | "b"): Record<string, string> {
+    return { authorization: `Whisper ${sessionId} ${peer}` };
+  }
+
+  it("没有凭据或格式不对：401，不缓存", async () => {
+    const missing = await request("/turn-credentials", false);
+    expect(missing.status).toBe(401);
+    expect(missing.headers.get("cache-control")).toBe("no-store");
+    expect(await missing.json()).toEqual({ ok: false, error: "unauthorized" });
+
+    const bad = await request("/turn-credentials", false, { authorization: "Bearer x" });
+    expect(bad.status).toBe(401);
+    expect(await bad.json()).toEqual({ ok: false, error: "unauthorized" });
+  });
+
+  it("会话里这个 peer 不在线：403", async () => {
+    const response = await request("/turn-credentials", false, header(randomId(), "a"));
+    expect(response.status).toBe(403);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ ok: false, error: "forbidden" });
+  });
+
   // 本地 .dev.vars 里配了真密钥时跳过，免得测试去请求真实服务
   const configured = Boolean((env as unknown as { TURN_KEY_ID?: string }).TURN_KEY_ID);
-  it.skipIf(configured)("没配置密钥：501，不缓存", async () => {
-    const response = await request("/turn-credentials", false);
+  it.skipIf(configured)("在线会话、没配置密钥：501，不缓存", async () => {
+    const sessionId = randomId();
+    const client = await connect(`/session/${sessionId}?peer=a`);
+    await client.next();
+    const response = await request("/turn-credentials", false, header(sessionId, "a"));
     expect(response.status).toBe(501);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ ok: false, error: "turn-not-configured" });
+    client.close();
   });
 });

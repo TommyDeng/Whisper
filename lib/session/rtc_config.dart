@@ -39,16 +39,25 @@ List<Map<String, dynamic>> parseTurnServers(String body) {
 
 /// [forceRelay] 为 true 时只用 TURN 中继候选（验收“强制中继”路径用）；
 /// 这时如果拿不到 TURN 凭据，通话会连不上。
+///
+/// 取 TURN 凭据必须带上当前会话身份（[sessionId] 和 [peer]，与文件接口相同的
+/// `Authorization: Whisper <sessionId> <peer>`）。缺身份或中继拒绝时只用 STUN。
 Future<Map<String, dynamic>> buildPeerConnectionConfig({
   String? signalingUrl,
   bool forceRelay = false,
+  String? sessionId,
+  String? peer,
 }) async {
   final iceServers = <Map<String, dynamic>>[
     {'urls': defaultStunUrl},
   ];
 
-  // 从中继获取 TURN 临时凭据
-  if (signalingUrl != null && signalingUrl.isNotEmpty) {
+  final hasAuth = sessionId != null &&
+      sessionId.isNotEmpty &&
+      (peer == 'a' || peer == 'b');
+
+  // 从中继获取 TURN 临时凭据。没有会话身份就不请求，避免无鉴权领取。
+  if (hasAuth && signalingUrl != null && signalingUrl.isNotEmpty) {
     final client = HttpClient();
     try {
       final base = signalingUrl
@@ -56,6 +65,7 @@ Future<Map<String, dynamic>> buildPeerConnectionConfig({
           .replaceFirst('ws://', 'http://');
       final uri = Uri.parse(base).resolve('/turn-credentials');
       final request = await client.getUrl(uri).timeout(const Duration(seconds: 5));
+      request.headers.set(HttpHeaders.authorizationHeader, 'Whisper $sessionId $peer');
       final response = await request.close().timeout(const Duration(seconds: 5));
       final body = await response.transform(utf8.decoder).join().timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) iceServers.addAll(parseTurnServers(body));

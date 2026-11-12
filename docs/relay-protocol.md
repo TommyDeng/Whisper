@@ -141,7 +141,7 @@ alarm 在 `expiresAt` 触发：用 `4002`（`expired`）关闭所有连接，删
 - Worker 用两个 secret（`TURN_KEY_ID`、`TURN_KEY_API_TOKEN`）向 Cloudflare 换凭据，有效期 4 小时；长期密钥不下发。
 - 没配置 secret 时返回 501 `turn-not-configured`；上游失败返回 502。客户端拿不到凭据就只用 STUN。
 - 响应不缓存，Worker 不记录请求和凭据。
-- 这个接口目前不需要身份验证，任何人都能领到短期凭据并消耗 TURN 流量；用量需在 Cloudflare 控制台关注。
+- 请求须带会话凭据 `Authorization: Whisper <sessionId> <peer>`，与文件接口相同。Worker 向对应的 SessionDO 确认该 peer 当前在线后才向 Cloudflare 换凭据。未鉴权 `401 unauthorized`，该 peer 不在线 `403 forbidden`。
 - 客户端设 `WHISPER_FORCE_RELAY=1` 时只用中继候选，用来验证中继路径。
 
 ## 文件中转（R2）

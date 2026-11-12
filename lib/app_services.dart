@@ -72,11 +72,13 @@ class AppServices {
   /// 当前通话走的路径（局域网 / ZeroTier / 公网直连 / 中继）；新通话开始时先发一个 null。
   Stream<IcePathType?> get callPaths => _callPaths.stream;
 
-  CallMedia _createCallMedia() {
+  CallMedia _createCallMedia(Contact contact) {
     final media = WebRtcCallMedia(
       loadConfig: () => buildPeerConnectionConfig(
         signalingUrl: AppConfig.relayUri.toString(),
         forceRelay: AppConfig.forceRelay,
+        sessionId: contact.sessionId,
+        peer: contact.peerRole,
       ),
     );
     unawaited(_callPathSubscription?.cancel());

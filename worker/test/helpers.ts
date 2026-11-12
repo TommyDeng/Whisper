@@ -76,9 +76,13 @@ export class Client {
   }
 }
 
-export function request(path: string, upgrade = true): Promise<Response> {
+export function request(
+  path: string,
+  upgrade = true,
+  headers: Record<string, string> = {},
+): Promise<Response> {
   return exports.default.fetch(`http://example.com${path}`, {
-    headers: upgrade ? { Upgrade: "websocket" } : {},
+    headers: upgrade ? { Upgrade: "websocket", ...headers } : { ...headers },
   });
 }
 

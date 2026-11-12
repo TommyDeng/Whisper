@@ -154,7 +154,7 @@ void main() {
   }) =>
       CallService(
         transport: transport,
-        createMedia: () {
+        createMedia: (_) {
           final media = FakeMedia();
           prepare?.call(media);
           medias.add(media);

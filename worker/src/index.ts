@@ -1,6 +1,7 @@
 import { handleFileRequest } from "./files";
 import { ROOM_CODE } from "./protocol";
-import { INVITE_KEY, RELAY_ID } from "./relay_limits";
+import { INVITE_KEY, RELAY_ID, parseSessionAuth } from "./relay_limits";
+import { authorizeSessionTurn } from "./session";
 import { type TurnEnv, issueTurnCredentials } from "./turn";
 
 export { RoomDO } from "./room";
@@ -42,6 +43,10 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/turn-credentials") {
+      const auth = parseSessionAuth(request);
+      if (!auth) return bad("unauthorized", 401);
+      const allowed = await authorizeSessionTurn(env.SESSIONS, auth.sessionId, auth.peer);
+      if (!allowed.ok) return bad(allowed.error, allowed.status);
       const result = await issueTurnCredentials(env as unknown as TurnEnv);
       if (!result.ok) return bad(result.error, result.status);
       return Response.json(
@@ -52,7 +57,7 @@ export default {
 
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
       return Response.json(
-        { ok: true, service: "whisper-webrtc-spike" },
+        { ok: true, service: "whisper-relay" },
         { headers: { "cache-control": "no-store" } },
       );
     }
