@@ -1,5 +1,7 @@
 #include "my_application.h"
 
+#include <stdlib.h>
+
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -57,6 +59,58 @@ static void my_application_register_desktop_channel(MyApplication* self,
       self->desktop_channel, desktop_method_call_cb, self, nullptr);
 }
 
+// 把已有窗口请到前台（包括 window_manager 藏起来的）。
+static void my_application_present_window(GtkWindow* window) {
+  gtk_widget_show(GTK_WIDGET(window));
+  gtk_window_deiconify(window);
+  gtk_window_set_urgency_hint(window, FALSE);
+  gtk_window_present(window);
+}
+
+static gboolean my_application_hard_quit(gpointer user_data) {
+  (void)user_data;
+  // Dart 侧若没能在超时内真正退出（例如通道还没注册），就强制结束，
+  // 避免「退出」只把窗口藏到托盘。
+  exit(0);
+  return G_SOURCE_REMOVE;
+}
+
+// 桌面「退出」动作会再拉起一次进程并带上 --quit；由这里通知已有进程真正退出。
+static void my_application_request_quit(MyApplication* self) {
+  if (self->desktop_channel != nullptr) {
+    fl_method_channel_invoke_method(self->desktop_channel, "quit", nullptr,
+                                    nullptr, nullptr, nullptr);
+    g_timeout_add(2000, my_application_hard_quit, nullptr);
+    return;
+  }
+  g_application_quit(G_APPLICATION(self));
+}
+
+static gboolean my_application_args_want_quit(gchar** argv, gint argc) {
+  for (gint i = 0; i < argc; i++) {
+    if (g_strcmp0(argv[i], "--quit") == 0) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+// Implements GApplication::command_line.
+// 必须设置 G_APPLICATION_HANDLES_COMMAND_LINE，第二次启动的参数才会转到已有进程。
+static int my_application_command_line(GApplication* application,
+                                       GApplicationCommandLine* command_line) {
+  MyApplication* self = MY_APPLICATION(application);
+  gint argc = 0;
+  gchar** argv = g_application_command_line_get_arguments(command_line, &argc);
+  if (my_application_args_want_quit(argv, argc)) {
+    my_application_request_quit(self);
+  } else {
+    g_application_activate(application);
+  }
+  g_strfreev(argv);
+  return 0;
+}
+
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
@@ -64,9 +118,7 @@ static void my_application_activate(GApplication* application) {
   // 已经有窗口：第二次启动只把现有窗口请到前台（包括已关到托盘的）。
   GList* existing = gtk_application_get_windows(GTK_APPLICATION(application));
   if (existing != nullptr) {
-    GtkWindow* window = GTK_WINDOW(existing->data);
-    gtk_window_set_urgency_hint(window, FALSE);
-    gtk_window_present(window);
+    my_application_present_window(GTK_WINDOW(existing->data));
     return;
   }
 
@@ -128,24 +180,16 @@ static void my_application_activate(GApplication* application) {
 }
 
 // Implements GApplication::local_command_line.
+// 只抽出 Dart 参数；返回 FALSE 让默认实现去 register，并把命令行转到主进程
+//（这样 `whisper --quit` 才能让已经在跑的实例退出）。
 static gboolean my_application_local_command_line(GApplication* application,
                                                   gchar*** arguments,
                                                   int* exit_status) {
   MyApplication* self = MY_APPLICATION(application);
   // Strip out the first argument as it is the binary name.
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
-
-  g_autoptr(GError) error = nullptr;
-  if (!g_application_register(application, nullptr, &error)) {
-    g_warning("Failed to register: %s", error->message);
-    *exit_status = 1;
-    return TRUE;
-  }
-
-  g_application_activate(application);
-  *exit_status = 0;
-
-  return TRUE;
+  (void)exit_status;
+  return FALSE;
 }
 
 // Implements GApplication::startup.
@@ -178,6 +222,7 @@ static void my_application_class_init(MyApplicationClass* klass) {
   G_APPLICATION_CLASS(klass)->activate = my_application_activate;
   G_APPLICATION_CLASS(klass)->local_command_line =
       my_application_local_command_line;
+  G_APPLICATION_CLASS(klass)->command_line = my_application_command_line;
   G_APPLICATION_CLASS(klass)->startup = my_application_startup;
   G_APPLICATION_CLASS(klass)->shutdown = my_application_shutdown;
   G_OBJECT_CLASS(klass)->dispose = my_application_dispose;
@@ -192,12 +237,13 @@ MyApplication* my_application_new() {
   // the application to be recognized beyond its binary name.
   g_set_prgname(APPLICATION_ID);
 
-  // 单实例：第二次启动走已有进程的 activate，把窗口请到前台。
+  // 单实例：第二次启动把命令行转到已有进程（显示窗口，或 --quit 真正退出）。
 #ifdef G_APPLICATION_DEFAULT_FLAGS
-  const GApplicationFlags flags = G_APPLICATION_DEFAULT_FLAGS;
+  GApplicationFlags flags = G_APPLICATION_DEFAULT_FLAGS;
 #else
-  const GApplicationFlags flags = G_APPLICATION_FLAGS_NONE;
+  GApplicationFlags flags = G_APPLICATION_FLAGS_NONE;
 #endif
+  flags = (GApplicationFlags)(flags | G_APPLICATION_HANDLES_COMMAND_LINE);
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
                                      flags, nullptr));

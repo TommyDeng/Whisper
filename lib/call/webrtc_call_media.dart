@@ -440,8 +440,9 @@ IcePathType classifyPath({
   if (localType == 'relay' || remoteType == 'relay') return IcePathType.relay;
   if (zeroTierAddresses.contains(localAddress)) return IcePathType.zerotier;
   if (localType == 'host' && remoteType == 'host') return IcePathType.lan;
-  if (const {'host', 'srflx', 'prflx'}.contains(localType))
+  if (const {'host', 'srflx', 'prflx'}.contains(localType)) {
     return IcePathType.srflx;
+  }
   return IcePathType.unknown;
 }
 

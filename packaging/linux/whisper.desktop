@@ -1,0 +1,19 @@
+[Desktop Entry]
+Name=耳语 Whisper
+Comment=端到端加密聊天与语音客户端
+Exec=whisper
+Icon=whisper
+Terminal=false
+Type=Application
+Categories=Network;InstantMessaging;
+StartupWMClass=whisper
+SingleMainWindow=true
+Actions=Show;Quit;
+
+[Desktop Action Show]
+Name=显示
+Exec=whisper --show
+
+[Desktop Action Quit]
+Name=退出
+Exec=whisper --quit

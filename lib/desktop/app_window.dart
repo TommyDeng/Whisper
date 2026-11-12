@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -22,25 +23,49 @@ class AppWindow with WindowListener, TrayListener {
   Future<void> init() async {
     if (_ready) return;
     if (!(Platform.isLinux || Platform.isWindows)) return;
+    kDesktopChannel.setMethodCallHandler(_onNativeCall);
     await windowManager.ensureInitialized();
     await windowManager.setPreventClose(true);
     windowManager.addListener(this);
     trayManager.addListener(this);
+    await _initTray();
+    _ready = true;
+    await refreshFocus();
+  }
+
+  /// 托盘图标和菜单。任一步失败都不能耽误后面的菜单注册。
+  ///
+  /// Linux 的 tray_manager 没有实现 `setToolTip`；1.0.3 在 setIcon 之后调用它
+  /// 会抛错，导致 [setContextMenu] 根本没跑，托盘图标在、菜单却是空的。
+  Future<void> _initTray() async {
     final icon = Platform.isWindows
         ? 'assets/icons/app_icon.ico'
         : 'assets/icons/whisper.png';
-    await trayManager.setIcon(icon);
-    await trayManager.setToolTip('耳语');
-    await trayManager.setContextMenu(
-      Menu(
-        items: [
-          MenuItem(key: 'show', label: '显示'),
-          MenuItem(key: 'quit', label: '退出'),
-        ],
-      ),
-    );
-    _ready = true;
-    await refreshFocus();
+    try {
+      await trayManager.setIcon(icon);
+    } catch (_) {}
+    try {
+      await trayManager.setToolTip('耳语');
+    } catch (_) {}
+    try {
+      await trayManager.setContextMenu(
+        Menu(
+          items: [
+            MenuItem(key: 'show', label: '显示'),
+            MenuItem(key: 'quit', label: '退出'),
+          ],
+        ),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _onNativeCall(MethodCall call) async {
+    switch (call.method) {
+      case 'quit':
+        await quit();
+      case 'show':
+        await showMainWindow();
+    }
   }
 
   /// 把主窗口请到前台（第二次启动或托盘「显示」）。
@@ -53,6 +78,7 @@ class AppWindow with WindowListener, TrayListener {
 
   /// 真正退出：取消关到托盘，拆掉托盘图标。
   Future<void> quit() async {
+    if (_quitting) return;
     _quitting = true;
     try {
       await windowManager.setPreventClose(false);
@@ -118,7 +144,18 @@ class AppWindow with WindowListener, TrayListener {
 
   @override
   void onTrayIconMouseDown() {
-    unawaited(showMainWindow());
+    // Windows 左键直接显示窗口；Linux 的 AppIndicator 会在点击时弹出已设置的菜单，
+    // 且 popUpContextMenu 在 Linux 上不可用。
+    if (Platform.isWindows) {
+      unawaited(showMainWindow());
+    }
+  }
+
+  @override
+  void onTrayIconRightMouseDown() {
+    if (Platform.isWindows) {
+      unawaited(trayManager.popUpContextMenu());
+    }
   }
 
   @override

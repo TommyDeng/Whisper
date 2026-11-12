@@ -141,8 +141,9 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
       final callId = snapshot.callId;
       _autoDismiss = Timer(const Duration(seconds: 3), () {
         final current = _services.calls.snapshot;
-        if (current.phase == CallPhase.ended && current.callId == callId)
+        if (current.phase == CallPhase.ended && current.callId == callId) {
           _services.calls.dismiss();
+        }
       });
     }
   }
