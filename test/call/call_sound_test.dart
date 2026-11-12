@@ -11,6 +11,11 @@ class _FakePlayer implements CallSoundPlayer {
   }
 
   @override
+  Future<void> playOnce(String asset) async {
+    log.add('once:$asset');
+  }
+
+  @override
   Future<void> stop() async {
     log.add('stop');
   }

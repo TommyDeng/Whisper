@@ -26,7 +26,7 @@ const String kDirectTransferNotice = '正在直传，请双方保持在线。文
 
 /// 收到直传请求时的说明。
 const String kDirectIncomingNotice =
-    '对方要向你发送一个大文件。双方必须同时在线，文件走点对点直连，不会经过服务器中转。';
+    '对方要向你发送一个文件。双方必须同时在线，文件走点对点直连，不会经过服务器中转。';
 
 /// 直传文件本地已经不在时的说明。
 const String kDirectLocalMissing = '本地文件已不在原来的位置。大文件不会存在服务器上，无法再次下载。';
@@ -36,8 +36,8 @@ String fileTransferErrorText(String? code) {
   return switch (code) {
     'too-large' => '文件太大，不能超过 100 MB。',
     'too-large-direct' => '文件太大，不能超过 100 GB。',
-    'offline' => '对方不在线。大文件需要双方同时在线才能直传。',
-    'no-direct' => '当前没有点对点直连（只通了中继），大文件不能经过语音中继传输。',
+    'offline' => '对方不在线，无法点对点直传。',
+    'no-direct' => '当前没有点对点直连（只通了中继），文件不能经过语音中继传输。',
     'busy' => '对方正忙，请稍后再试。',
     'declined' => '对方拒绝了这次文件传输。',
     'timeout' => '对方没有接受这次传输。',
@@ -123,6 +123,75 @@ Future<bool> confirmOverwrite(BuildContext context, String name) async {
     ),
   );
   return result ?? false;
+}
+
+
+/// 确认经服务器中转发送时的标题。
+const String kRelayConfirmTitle = '经服务器发送？';
+
+/// 确认按钮。
+const String kRelayConfirmSend = '确认发送';
+
+/// 无法中转时的标题。
+const String kRelayUnavailableTitle = '无法发送';
+
+/// 请用户确认后再走中转的说明。[reason] 为 `offline` 或 `no-direct`。
+String relayConfirmBody({required String reason, required int size}) {
+  final why = reason == 'no-direct' ? '当前没有点对点直连' : '对方现在不在线';
+  return '$why。文件会先加密，再上传到服务器，最多保留 7 天，对方下载后删除。大小 ${formatFileSize(size)}（中转上限 100 MB）。确认发送吗？';
+}
+
+/// 不能走中转时的说明（超过 100 MiB）。
+String relayUnavailableBody({required String reason, required int size}) {
+  final why = reason == 'no-direct' ? '当前没有点对点直连' : '对方现在不在线';
+  return '$why，且文件大小 ${formatFileSize(size)}，超过 100 MB 的中转上限，不能经过服务器发送。请在双方在线且可直连时再试。';
+}
+
+/// 询问是否经服务器中转发送。用户取消或关掉对话框返回 false。
+Future<bool> confirmRelaySend(
+  BuildContext context, {
+  required String reason,
+  required int size,
+}) async {
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text(kRelayConfirmTitle),
+      content: Text(relayConfirmBody(reason: reason, size: size)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text(kRelayConfirmSend),
+        ),
+      ],
+    ),
+  );
+  return result ?? false;
+}
+
+/// 说明无法经服务器中转。
+Future<void> showRelayUnavailable(
+  BuildContext context, {
+  required String reason,
+  required int size,
+}) {
+  return showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text(kRelayUnavailableTitle),
+      content: Text(relayUnavailableBody(reason: reason, size: size)),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('知道了'),
+        ),
+      ],
+    ),
+  );
 }
 
 /// 还没有变成消息的上传（进行中或失败），画在输入栏上方。

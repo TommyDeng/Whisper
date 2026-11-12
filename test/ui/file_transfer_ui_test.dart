@@ -70,7 +70,7 @@ void main() {
       expect(fileTransferErrorText(null), texts['failed']);
       expect(fileTransferErrorText('other'), texts['failed']);
       expect(fileTransferErrorText('too-large-direct'), '文件太大，不能超过 100 GB。');
-      expect(fileTransferErrorText('offline'), '对方不在线。大文件需要双方同时在线才能直传。');
+      expect(fileTransferErrorText('offline'), '对方不在线，无法点对点直传。');
       expect(fileTransferErrorText('no-direct'), contains('不能经过语音中继'));
       expect(fileTransferErrorText('busy'), '对方正忙，请稍后再试。');
       expect(fileTransferErrorText('declined'), '对方拒绝了这次文件传输。');
@@ -89,6 +89,21 @@ void main() {
       expect(formatFileSize(1024 * 1024 * 1024), '1.0 GB');
       expect(formatFileSize(1536 * 1024 * 1024), '1.5 GB');
       expect(formatFileSize(12 * 1024 * 1024 * 1024), '12 GB');
+    });
+
+    test('中转确认和无法中转的说明', () {
+      final confirm = relayConfirmBody(reason: 'offline', size: 2 * 1024 * 1024);
+      expect(confirm, contains('对方现在不在线'));
+      expect(confirm, contains('最多保留 7 天'));
+      expect(confirm, contains('2.0 MB'));
+      expect(confirm, contains('100 MB'));
+      expect(relayConfirmBody(reason: 'no-direct', size: 10), contains('当前没有点对点直连'));
+
+      final denied = relayUnavailableBody(reason: 'offline', size: 200 * 1024 * 1024);
+      expect(denied, contains('对方现在不在线'));
+      expect(denied, contains('200 MB'));
+      expect(denied, contains('超过 100 MB'));
+      expect(relayUnavailableBody(reason: 'no-direct', size: 200 * 1024 * 1024), contains('当前没有点对点直连'));
     });
   });
 
@@ -447,6 +462,12 @@ void main() {
       await tester.tap(find.byTooltip('发送文件'));
       await _pumpUntil(
         tester,
+        () => find.text(kRelayConfirmTitle).evaluate().isNotEmpty,
+        what: '中转确认弹窗',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, kRelayConfirmSend));
+      await _pumpUntil(
+        tester,
         () => find.textContaining('正在发送 相册.zip').evaluate().isNotEmpty,
         what: '上传进度',
       );
@@ -474,7 +495,7 @@ void main() {
 
       await pumpChat(tester);
       picker.source = failed.path;
-      await tester.runAsync(() => files.send(bobContact, failed));
+      await tester.runAsync(() => files.sendViaRelay(bobContact, failed));
       await tester.pump();
       expect(find.text('发送失败：失败.bin'), findsOneWidget);
       expect(find.text('中继拒绝了这次传输。'), findsOneWidget);
@@ -489,7 +510,7 @@ void main() {
 
       fileRelay.before = null;
       final ok = await real(tester, () => source(10, '成功.bin'));
-      await tester.runAsync(() => files.send(bobContact, ok));
+      await tester.runAsync(() => files.sendViaRelay(bobContact, ok));
       await tester.pump();
       await _pumpUntil(
         tester,
@@ -651,6 +672,27 @@ void main() {
       await pumpChat(tester);
       expect(find.text(kLocalFileMissing), findsOneWidget);
       expect(find.text('下载'), findsNothing);
+    });
+
+    testWidgets('对方离线时取消中转确认则不发送', (tester) async {
+      final file = await real(tester, () => source(10, '取消.bin'));
+      picker.source = file.path;
+      await pumpChat(tester);
+      await tester.tap(find.byTooltip('发送文件'));
+      await _pumpUntil(
+        tester,
+        () => find.text(kRelayConfirmTitle).evaluate().isNotEmpty,
+        what: '中转确认弹窗',
+      );
+      expect(find.textContaining('对方现在不在线'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, '取消'));
+      await tester.pump();
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+      expect(find.text(kRelayConfirmTitle), findsNothing);
+      expect(find.textContaining('正在发送'), findsNothing);
+      expect(fileRelay.files, isEmpty);
+      expect(await real(tester, () => messaging.messages(bobContact)), isEmpty);
     });
 
     testWidgets('取消选文件则什么都不做', (tester) async {

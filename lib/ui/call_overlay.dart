@@ -1,4 +1,4 @@
-/// 通话界面：有通话（呼出、来电、通话中、刚结束）时盖在整个应用上面。
+/// 通话界面：有通话时在窗口顶部显示一条不挡住聊天的栏，来电是横幅。
 library;
 
 import 'dart:async';
@@ -9,10 +9,11 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../app_services.dart';
 import '../call/call_service.dart';
 import '../call/call_sound.dart';
+import '../call/message_sound.dart';
 import '../voice/ice_strategy.dart';
 import 'app_theme.dart';
 
-/// 包在应用最外层（MaterialApp.builder），监听通话状态。
+/// 包在应用最外层（MaterialApp.builder），监听通话状态和来信提示音。
 class CallHost extends StatefulWidget {
   const CallHost({super.key, required this.child});
 
@@ -22,14 +23,17 @@ class CallHost extends StatefulWidget {
   State<CallHost> createState() => _CallHostState();
 }
 
-class _CallHostState extends State<CallHost> {
+class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
   final _services = AppServices.instance;
   late CallSnapshot _snapshot = _services.calls.snapshot;
   StreamSubscription<CallSnapshot>? _changes;
   StreamSubscription<IcePathType?>? _paths;
   StreamSubscription<double>? _levels;
   StreamSubscription<RTCVideoRenderer?>? _renderers;
+  StreamSubscription<({String sessionId, bool isFile})>? _incomingChat;
+  StreamSubscription<String>? _incomingFiles;
   final _sounds = CallSound();
+  final _messageSound = MessageSound();
   Timer? _ticker;
   Timer? _autoDismiss;
   IcePathType? _path;
@@ -39,6 +43,7 @@ class _CallHostState extends State<CallHost> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _changes = _services.calls.changes.listen(_onChange);
     _paths = _services.callPaths.listen((path) {
       if (mounted) setState(() => _path = path);
@@ -49,19 +54,45 @@ class _CallHostState extends State<CallHost> {
     _renderers = _services.callRemoteRenderers.listen((renderer) {
       if (mounted) setState(() => _remoteRenderer = renderer);
     });
+    _incomingChat = _services.messaging.incomingChat.listen((event) {
+      _maybeChime(event.sessionId);
+    });
+    _incomingFiles = _services.files.incomingArrivals.listen(_maybeChime);
     unawaited(_sounds.sync(_snapshot.phase));
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _changes?.cancel();
     _paths?.cancel();
     _levels?.cancel();
     _renderers?.cancel();
+    _incomingChat?.cancel();
+    _incomingFiles?.cancel();
     _ticker?.cancel();
     _autoDismiss?.cancel();
     unawaited(_sounds.dispose());
+    unawaited(_messageSound.dispose());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _services.uiFocus.windowFocused = state == AppLifecycleState.resumed;
+  }
+
+  void _maybeChime(String sessionId) {
+    final focus = _services.uiFocus;
+    if (shouldPlayMessageSound(
+      fromSelf: false,
+      sessionId: sessionId,
+      visibleSessionId: focus.visibleSessionId,
+      windowFocused: focus.windowFocused,
+      callPhase: _services.calls.snapshot.phase,
+    )) {
+      unawaited(_messageSound.chime());
+    }
   }
 
   void _onChange(CallSnapshot snapshot) {
@@ -98,10 +129,18 @@ class _CallHostState extends State<CallHost> {
 
   @override
   Widget build(BuildContext context) {
-    if (_snapshot.phase == CallPhase.idle) return widget.child;
+    if (_snapshot.phase == CallPhase.idle && _remoteRenderer == null) {
+      return widget.child;
+    }
     return Stack(
       children: [
-        widget.child,
+        Column(
+          children: [
+            if (_snapshot.phase != CallPhase.idle)
+              CallBar(snapshot: _snapshot, path: _path, micLevel: _micLevel),
+            Expanded(child: widget.child),
+          ],
+        ),
         if (_remoteRenderer != null)
           Positioned(
             left: 0,
@@ -110,16 +149,20 @@ class _CallHostState extends State<CallHost> {
             height: 1,
             child: IgnorePointer(child: RTCVideoView(_remoteRenderer!)),
           ),
-        Positioned.fill(
-          child: _CallPanel(snapshot: _snapshot, path: _path, micLevel: _micLevel),
-        ),
       ],
     );
   }
 }
 
-class _CallPanel extends StatelessWidget {
-  const _CallPanel({required this.snapshot, required this.path, required this.micLevel});
+/// 窗口顶部的通话条：状态、计时、麦克风电平、静音和挂断；来电则是接听/拒接横幅。
+class CallBar extends StatelessWidget {
+  const CallBar({
+    super.key,
+    required this.snapshot,
+    required this.path,
+    required this.micLevel,
+    this.now,
+  });
 
   final CallSnapshot snapshot;
   final IcePathType? path;
@@ -127,61 +170,85 @@ class _CallPanel extends StatelessWidget {
   /// 本端麦克风电平，0.0–1.0。静音或尚无采集时为 0。
   final double micLevel;
 
+  /// 用来算通话时长；为空则取当前时间。测试可传入固定值。
+  final DateTime? now;
+
   CallService get _calls => AppServices.instance.calls;
 
   @override
   Widget build(BuildContext context) {
     final name = snapshot.contact?.name ?? '';
+    final displayName = name.isEmpty ? '未命名联系人' : name;
+    final status = callStatusText(snapshot, now ?? DateTime.now());
     return Material(
-      color: AppTheme.white,
+      color: AppTheme.surface,
+      elevation: 1,
       child: SafeArea(
-        child: Column(
-          children: [
-            const Spacer(flex: 2),
-            const Icon(Icons.person_outline, size: 64, color: AppTheme.darkGray),
-            const SizedBox(height: 16),
-            Text(
-              name.isEmpty ? '未命名联系人' : name,
-              style: const TextStyle(color: AppTheme.black, fontSize: 24, fontWeight: FontWeight.w500),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              callStatusText(snapshot, DateTime.now()),
-              style: const TextStyle(color: AppTheme.darkGray, fontSize: 15),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 18,
-              child: snapshot.phase == CallPhase.active && path != null
-                  ? Text(
-                      '端到端加密 · ${callPathLabel(path!)}',
-                      style: const TextStyle(color: AppTheme.midGray, fontSize: 12),
-                    )
-                  : null,
-            ),
-            const SizedBox(height: 12),
-            if (_showMicLevel(snapshot)) MicLevelBar(level: snapshot.muted ? 0 : micLevel),
-            const Spacer(flex: 3),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: _buttons()),
-            const Spacer(),
-          ],
+        bottom: false,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: AppTheme.lightGray)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.call_outlined, size: 20, color: AppTheme.black),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      displayName,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppTheme.black,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      status,
+                      style: const TextStyle(color: AppTheme.darkGray, fontSize: 12),
+                    ),
+                    if (snapshot.phase == CallPhase.active && path != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        '端到端加密 · ${callPathLabel(path!)}',
+                        style: const TextStyle(color: AppTheme.midGray, fontSize: 11),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (_showMicLevel(snapshot)) ...[
+                const SizedBox(width: 8),
+                MicLevelBar(level: snapshot.muted ? 0 : micLevel),
+              ],
+              const SizedBox(width: 8),
+              ..._actions(),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  List<Widget> _buttons() {
+  List<Widget> _actions() {
     switch (snapshot.phase) {
       case CallPhase.incoming:
         return [
-          _RoundButton(
+          _BarButton(
             label: '拒接',
             icon: Icons.call_end,
             filled: AppTheme.red,
             onPressed: () => unawaited(_calls.decline()),
           ),
-          const SizedBox(width: 64),
-          _RoundButton(
+          const SizedBox(width: 4),
+          _BarButton(
             label: '接听',
             icon: Icons.call,
             filled: AppTheme.black,
@@ -192,14 +259,14 @@ class _CallPanel extends StatelessWidget {
       case CallPhase.connecting:
       case CallPhase.active:
         return [
-          _RoundButton(
+          _BarButton(
             label: snapshot.muted ? '取消静音' : '静音',
             icon: snapshot.muted ? Icons.mic_off : Icons.mic_none,
             filled: snapshot.muted ? AppTheme.darkGray : null,
             onPressed: () => _calls.setMuted(!snapshot.muted),
           ),
-          const SizedBox(width: 64),
-          _RoundButton(
+          const SizedBox(width: 4),
+          _BarButton(
             label: '挂断',
             icon: Icons.call_end,
             filled: AppTheme.red,
@@ -208,7 +275,7 @@ class _CallPanel extends StatelessWidget {
         ];
       case CallPhase.ended:
         return [
-          _RoundButton(label: '关闭', icon: Icons.close, onPressed: _calls.dismiss),
+          _BarButton(label: '关闭', icon: Icons.close, onPressed: _calls.dismiss),
         ];
       case CallPhase.idle:
         return const [];
@@ -216,8 +283,8 @@ class _CallPanel extends StatelessWidget {
   }
 }
 
-class _RoundButton extends StatelessWidget {
-  const _RoundButton({required this.label, required this.icon, required this.onPressed, this.filled});
+class _BarButton extends StatelessWidget {
+  const _BarButton({required this.label, required this.icon, required this.onPressed, this.filled});
 
   final String label;
   final IconData icon;
@@ -228,27 +295,30 @@ class _RoundButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Material(
-          color: filled ?? AppTheme.white,
-          shape: CircleBorder(
-            side: filled == null ? const BorderSide(color: AppTheme.lightGray) : BorderSide.none,
-          ),
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: onPressed,
-            child: SizedBox(
-              width: 64,
-              height: 64,
-              child: Icon(icon, color: filled == null ? AppTheme.black : AppTheme.white, size: 28),
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Material(
+            color: filled ?? AppTheme.white,
+            shape: CircleBorder(
+              side: filled == null ? const BorderSide(color: AppTheme.lightGray) : BorderSide.none,
+            ),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onPressed,
+              child: SizedBox(
+                width: 36,
+                height: 36,
+                child: Icon(icon, color: filled == null ? AppTheme.black : AppTheme.white, size: 18),
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Text(label, style: const TextStyle(color: AppTheme.darkGray, fontSize: 12)),
-      ],
+          const SizedBox(height: 2),
+          Text(label, style: const TextStyle(color: AppTheme.darkGray, fontSize: 10)),
+        ],
+      ),
     );
   }
 }
@@ -336,8 +406,8 @@ class MicLevelBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final filled = (level.clamp(0.0, 1.0) * _segments).ceil();
     return SizedBox(
-      width: 96,
-      height: 10,
+      width: 72,
+      height: 8,
       child: Row(
         children: [
           for (var i = 0; i < _segments; i++) ...[
@@ -356,4 +426,3 @@ class MicLevelBar extends StatelessWidget {
     );
   }
 }
-

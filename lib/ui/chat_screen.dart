@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 
 import '../app_services.dart';
 import '../contact/contact.dart';
+import '../files/file_send_plan.dart';
 import '../files/file_share_service.dart';
 import '../messaging/message_codec.dart';
 import '../messaging/messaging_service.dart';
@@ -174,10 +175,12 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     unawaited(_loadMessages());
     unawaited(_loadLocalPaths());
+    AppServices.instance.uiFocus.enterSession(_sessionId);
   }
 
   @override
   void dispose() {
+    AppServices.instance.uiFocus.leaveSession(_sessionId);
     unawaited(_messageSub?.cancel());
     unawaited(_fileSub?.cancel());
     // 离开聊天时，读过的阅后即焚消息从本机删除
@@ -269,7 +272,65 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     if (!mounted || path == null || path.isEmpty) return;
-    await _files.send(widget.contact, File(path));
+    final file = File(path);
+    int size;
+    try {
+      size = await file.length();
+    } on FileSystemException {
+      size = 0;
+    }
+
+    final online = _messaging.peerOnline(_sessionId);
+    final plan = planFileSend(
+      size: size,
+      peerOnline: online,
+      directAvailable: true,
+    );
+    await _followFilePlan(plan, file, size);
+  }
+
+  Future<void> _followFilePlan(FileSendPlan plan, File file, int size) async {
+    switch (plan.action) {
+      case FileSendAction.tooLarge:
+        _toast(fileTransferErrorText('too-large-direct'));
+        return;
+      case FileSendAction.direct:
+        await _files.sendDirect(widget.contact, file);
+        if (!mounted) return;
+        await _maybeFallbackToRelay(file, size);
+        return;
+      case FileSendAction.relayConfirm:
+        final confirmed = await confirmRelaySend(
+          context,
+          reason: plan.reason ?? 'offline',
+          size: size,
+        );
+        if (!confirmed || !mounted) return;
+        await _files.sendViaRelay(widget.contact, file);
+        return;
+      case FileSendAction.relayUnavailable:
+        await showRelayUnavailable(
+          context,
+          reason: plan.reason ?? 'offline',
+          size: size,
+        );
+        return;
+    }
+  }
+
+  /// 直传因为对方离线或没有点对点直连失败时，再问用户要不要改走中转。
+  Future<void> _maybeFallbackToRelay(File file, int size) async {
+    final failed = _files
+        .uploads(_sessionId)
+        .where((state) => state.isDirect && canFallbackToRelay(state.error))
+        .toList();
+    if (failed.isEmpty) return;
+    final state = failed.last;
+    final reason = state.error!;
+    _files.cancel(state.id);
+    if (!mounted) return;
+    final plan = planFileSend(size: size, peerOnline: false, directFailure: reason);
+    await _followFilePlan(plan, file, size);
   }
 
   Future<void> _acceptIncoming(FileTransferState state) async {
