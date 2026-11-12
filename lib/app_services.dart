@@ -6,6 +6,8 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+
 import 'app_config.dart';
 import 'call/call_service.dart';
 import 'call/call_transport.dart';
@@ -68,9 +70,19 @@ class AppServices {
 
   final _callPaths = StreamController<IcePathType?>.broadcast();
   StreamSubscription<IcePathType>? _callPathSubscription;
+  final _callMicLevels = StreamController<double>.broadcast();
+  StreamSubscription<double>? _callMicLevelSubscription;
+  final _callRenderers = StreamController<RTCVideoRenderer?>.broadcast();
+  StreamSubscription<RTCVideoRenderer?>? _callRendererSubscription;
 
   /// 当前通话走的路径（局域网 / ZeroTier / 公网直连 / 中继）；新通话开始时先发一个 null。
   Stream<IcePathType?> get callPaths => _callPaths.stream;
+
+  /// 当前通话的本端麦克风电平（0.0–1.0）；新通话开始时先发 0。
+  Stream<double> get callMicLevels => _callMicLevels.stream;
+
+  /// 用于播放远端音频的隐藏渲染器；新通话开始或结束时发 null。
+  Stream<RTCVideoRenderer?> get callRemoteRenderers => _callRenderers.stream;
 
   CallMedia _createCallMedia(Contact contact) {
     final media = WebRtcCallMedia(
@@ -82,8 +94,14 @@ class AppServices {
       ),
     );
     unawaited(_callPathSubscription?.cancel());
+    unawaited(_callMicLevelSubscription?.cancel());
+    unawaited(_callRendererSubscription?.cancel());
     _callPaths.add(null);
+    _callMicLevels.add(0);
+    _callRenderers.add(null);
     _callPathSubscription = media.paths.listen(_callPaths.add);
+    _callMicLevelSubscription = media.localAudioLevels.listen(_callMicLevels.add);
+    _callRendererSubscription = media.remoteRendererChanges.listen(_callRenderers.add);
     return media;
   }
 

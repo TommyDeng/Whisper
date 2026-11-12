@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../voice/ice_strategy.dart';
+import 'call_audio.dart';
 import 'call_service.dart';
 import 'call_signal.dart';
 
@@ -24,9 +25,14 @@ class WebRtcCallMedia implements CallMedia {
   final _candidates = StreamController<CallCandidate>();
   final _states = StreamController<CallMediaState>();
   final _paths = StreamController<IcePathType>.broadcast();
+  final _levels = StreamController<double>.broadcast();
+  final _rendererChanges = StreamController<RTCVideoRenderer?>.broadcast();
 
   RTCPeerConnection? _pc;
   MediaStream? _local;
+  final _remoteRenderer = RTCVideoRenderer();
+  bool _remoteRendererReady = false;
+  Timer? _levelTimer;
   bool _muted = false;
   bool _closed = false;
   bool _connected = false;
@@ -43,6 +49,15 @@ class WebRtcCallMedia implements CallMedia {
 
   /// 路径变化（广播流）。
   Stream<IcePathType> get paths => _paths.stream;
+
+  /// 本端麦克风电平（0.0–1.0），通话过程中周期性更新。
+  Stream<double> get localAudioLevels => _levels.stream;
+
+  /// 用于播放远端音频的隐藏渲染器；初始化完成前为 null。
+  RTCVideoRenderer? get remoteRenderer => _remoteRendererReady ? _remoteRenderer : null;
+
+  /// 远端渲染器就绪或被释放。
+  Stream<RTCVideoRenderer?> get remoteRendererChanges => _rendererChanges.stream;
 
   @override
   Future<String> createOffer() async {
@@ -89,6 +104,8 @@ class WebRtcCallMedia implements CallMedia {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    _levelTimer?.cancel();
+    _levelTimer = null;
     final pc = _pc;
     final local = _local;
     _pc = null;
@@ -102,9 +119,19 @@ class WebRtcCallMedia implements CallMedia {
     try {
       await pc?.close();
     } catch (_) {}
+    try {
+      _remoteRenderer.srcObject = null;
+      if (_remoteRendererReady) {
+        await _remoteRenderer.dispose();
+      }
+    } catch (_) {}
+    _remoteRendererReady = false;
+    if (!_rendererChanges.isClosed) _rendererChanges.add(null);
     await _candidates.close();
     await _states.close();
     await _paths.close();
+    await _levels.close();
+    await _rendererChanges.close();
   }
 
   Future<RTCPeerConnection> _open() async {
@@ -119,6 +146,8 @@ class WebRtcCallMedia implements CallMedia {
     }
     _local = local;
     setMuted(_muted);
+    await _selectDefaultPlayout();
+    await _ensureRemoteRenderer();
 
     final pc = await createPeerConnection(await loadConfig());
     if (_closed) {
@@ -156,13 +185,70 @@ class WebRtcCallMedia implements CallMedia {
       }
     };
     pc.onTrack = (event) {
-      if (event.track.kind == 'audio') event.track.enabled = true;
+      if (event.track.kind != 'audio') return;
+      event.track.enabled = true;
+      if (event.streams.isNotEmpty && _remoteRendererReady) {
+        _remoteRenderer.srcObject = event.streams[0];
+      }
     };
 
     for (final track in local.getAudioTracks()) {
       await pc.addTrack(track, local);
     }
+    _startLevelTimer();
     return pc;
+  }
+
+  Future<void> _ensureRemoteRenderer() async {
+    if (_remoteRendererReady || _closed) return;
+    try {
+      await _remoteRenderer.initialize();
+      if (_closed) {
+        await _remoteRenderer.dispose();
+        return;
+      }
+      _remoteRendererReady = true;
+      _rendererChanges.add(_remoteRenderer);
+    } catch (_) {
+      // 渲染器初始化失败时仍继续通话，只是可能播不出远端声音
+    }
+  }
+
+  Future<void> _selectDefaultPlayout() async {
+    try {
+      final devices = await navigator.mediaDevices.enumerateDevices();
+      final id = pickDefaultPlayoutDeviceId([
+        for (final device in devices)
+          AudioDeviceOption(
+            deviceId: device.deviceId,
+            label: device.label,
+            kind: device.kind ?? '',
+          ),
+      ]);
+      if (id == null || _closed) return;
+      await Helper.selectAudioOutput(id);
+    } catch (_) {
+      // 本机或平台不支持选择输出设备时保持系统默认
+    }
+  }
+
+  void _startLevelTimer() {
+    _levelTimer?.cancel();
+    _levelTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      unawaited(_refreshLocalAudioLevel());
+    });
+  }
+
+  Future<void> _refreshLocalAudioLevel() async {
+    try {
+      final pc = _pc;
+      if (pc == null || _closed) return;
+      final level = localAudioLevelFromStats(await pc.getStats());
+      if (level == null || _closed || _levels.isClosed) return;
+      _levels.add(_muted ? 0 : level);
+    } catch (_) {
+      // 拿不到统计就不更新电平
+    }
   }
 
   /// 从统计信息里找出选中的候选对，判断走的是哪条路径。

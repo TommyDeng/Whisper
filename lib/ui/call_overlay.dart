@@ -4,9 +4,11 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../app_services.dart';
 import '../call/call_service.dart';
+import '../call/call_sound.dart';
 import '../voice/ice_strategy.dart';
 import 'app_theme.dart';
 
@@ -25,9 +27,14 @@ class _CallHostState extends State<CallHost> {
   late CallSnapshot _snapshot = _services.calls.snapshot;
   StreamSubscription<CallSnapshot>? _changes;
   StreamSubscription<IcePathType?>? _paths;
+  StreamSubscription<double>? _levels;
+  StreamSubscription<RTCVideoRenderer?>? _renderers;
+  final _sounds = CallSound();
   Timer? _ticker;
   Timer? _autoDismiss;
   IcePathType? _path;
+  double _micLevel = 0;
+  RTCVideoRenderer? _remoteRenderer;
 
   @override
   void initState() {
@@ -36,20 +43,36 @@ class _CallHostState extends State<CallHost> {
     _paths = _services.callPaths.listen((path) {
       if (mounted) setState(() => _path = path);
     });
+    _levels = _services.callMicLevels.listen((level) {
+      if (mounted) setState(() => _micLevel = level);
+    });
+    _renderers = _services.callRemoteRenderers.listen((renderer) {
+      if (mounted) setState(() => _remoteRenderer = renderer);
+    });
+    unawaited(_sounds.sync(_snapshot.phase));
   }
 
   @override
   void dispose() {
     _changes?.cancel();
     _paths?.cancel();
+    _levels?.cancel();
+    _renderers?.cancel();
     _ticker?.cancel();
     _autoDismiss?.cancel();
+    unawaited(_sounds.dispose());
     super.dispose();
   }
 
   void _onChange(CallSnapshot snapshot) {
     if (!mounted) return;
-    setState(() => _snapshot = snapshot);
+    setState(() {
+      _snapshot = snapshot;
+      if (snapshot.phase == CallPhase.idle || snapshot.phase == CallPhase.incoming) {
+        _micLevel = 0;
+      }
+    });
+    unawaited(_sounds.sync(snapshot.phase));
 
     // 通话中每秒刷新一次时长
     if (snapshot.phase == CallPhase.active) {
@@ -79,17 +102,30 @@ class _CallHostState extends State<CallHost> {
     return Stack(
       children: [
         widget.child,
-        Positioned.fill(child: _CallPanel(snapshot: _snapshot, path: _path)),
+        if (_remoteRenderer != null)
+          Positioned(
+            left: 0,
+            top: 0,
+            width: 1,
+            height: 1,
+            child: IgnorePointer(child: RTCVideoView(_remoteRenderer!)),
+          ),
+        Positioned.fill(
+          child: _CallPanel(snapshot: _snapshot, path: _path, micLevel: _micLevel),
+        ),
       ],
     );
   }
 }
 
 class _CallPanel extends StatelessWidget {
-  const _CallPanel({required this.snapshot, required this.path});
+  const _CallPanel({required this.snapshot, required this.path, required this.micLevel});
 
   final CallSnapshot snapshot;
   final IcePathType? path;
+
+  /// 本端麦克风电平，0.0–1.0。静音或尚无采集时为 0。
+  final double micLevel;
 
   CallService get _calls => AppServices.instance.calls;
 
@@ -123,6 +159,8 @@ class _CallPanel extends StatelessWidget {
                     )
                   : null,
             ),
+            const SizedBox(height: 12),
+            if (_showMicLevel(snapshot)) MicLevelBar(level: snapshot.muted ? 0 : micLevel),
             const Spacer(flex: 3),
             Row(mainAxisAlignment: MainAxisAlignment.center, children: _buttons()),
             const Spacer(),
@@ -279,3 +317,43 @@ String callPathLabel(IcePathType path) {
       return '路径未知';
   }
 }
+
+bool _showMicLevel(CallSnapshot snapshot) {
+  return snapshot.phase == CallPhase.outgoing ||
+      snapshot.phase == CallPhase.connecting ||
+      snapshot.phase == CallPhase.active;
+}
+
+/// 本端麦克风电平条，供通话界面使用；[level] 按 0.0–1.0 解读。
+class MicLevelBar extends StatelessWidget {
+  const MicLevelBar({super.key, required this.level});
+
+  final double level;
+
+  static const _segments = 8;
+
+  @override
+  Widget build(BuildContext context) {
+    final filled = (level.clamp(0.0, 1.0) * _segments).ceil();
+    return SizedBox(
+      width: 96,
+      height: 10,
+      child: Row(
+        children: [
+          for (var i = 0; i < _segments; i++) ...[
+            if (i > 0) const SizedBox(width: 2),
+            Expanded(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: i < filled ? AppTheme.black : AppTheme.lightGray,
+                  borderRadius: BorderRadius.circular(1),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
