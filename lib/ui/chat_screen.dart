@@ -394,7 +394,10 @@ class _ChatScreenState extends State<ChatScreen> {
         return Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: ChatBubble(
-            text: message.text ?? '（这条消息无法解密）',
+            text: message.text ??
+                (message.file != null
+                    ? '[文件] ${message.file!.safeName}'
+                    : '（这条消息无法解密）'),
             isSent: message.isSent,
             status: message.status,
             securityStatus: _security,

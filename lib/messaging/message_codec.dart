@@ -34,6 +34,13 @@ class ChatContent {
         burn = false,
         receiptKind = kind;
 
+  /// 文件消息：[body] 是 `FileOffer.encode()` 的结果。文件内容另经文件中转接口传输。
+  const ChatContent.file(this.body, {required this.sentAt})
+      : type = typeFile,
+        burn = false,
+        receiptKind = null,
+        ids = const [];
+
   /// 通话信令：[body] 是 `CallSignal.encode()` 的结果。只作为临时消息发送，不落库。
   const ChatContent.call(this.body, {required this.sentAt})
       : type = typeCall,
@@ -42,6 +49,7 @@ class ChatContent {
         ids = const [];
 
   static const String typeText = 'text';
+  static const String typeFile = 'file';
   static const String typeReceipt = 'receipt';
   static const String typeCall = 'call';
 
@@ -51,7 +59,7 @@ class ChatContent {
   /// 一条回执最多带多少个消息 ID。
   static const int maxReceiptIds = 100;
 
-  /// 内容类型：[typeText]、[typeReceipt] 或 [typeCall]；不认识的类型由接收方忽略。
+  /// 内容类型：[typeText]、[typeFile]、[typeReceipt] 或 [typeCall]；不认识的类型由接收方忽略。
   final String type;
   final String body;
 
@@ -83,6 +91,9 @@ class MessageCodec {
 
   /// 文本消息正文的上限（UTF-8 字节）。
   static const int maxTextBytes = 16 * 1024;
+
+  /// 文件消息正文的上限（UTF-8 字节）。
+  static const int maxFileBodyBytes = 2048;
 
   /// 通话信令正文的上限（UTF-8 字节）。
   static const int maxSignalBytes = 32 * 1024;
@@ -137,6 +148,10 @@ class MessageCodec {
         utf8.encode(content.body).length > maxTextBytes) {
       throw ArgumentError('消息过长');
     }
+    if (content.type == ChatContent.typeFile &&
+        utf8.encode(content.body).length > maxFileBodyBytes) {
+      throw ArgumentError('文件描述过长');
+    }
     if (content.type == ChatContent.typeCall &&
         utf8.encode(content.body).length > maxSignalBytes) {
       throw ArgumentError('信令过长');
@@ -163,7 +178,7 @@ class MessageCodec {
     if (content.type == ChatContent.typeReceipt) {
       jsonMap['kind'] = content.receiptKind;
       jsonMap['ids'] = content.ids;
-    } else if (content.burn) {
+    } else if (content.burn && content.type != ChatContent.typeFile) {
       jsonMap['burn'] = true;
     }
     final bytes = utf8.encode(jsonEncode(jsonMap));

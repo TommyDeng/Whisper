@@ -1,4 +1,4 @@
-/// 应用级服务：身份、消息、配对、通话。界面通过 [AppServices.instance] 取用。
+/// 应用级服务：身份、消息、配对、通话、文件。界面通过 [AppServices.instance] 取用。
 ///
 /// 构造时不做任何 I/O；网络连接只在 [start]（由 main 调用）之后才建立，
 /// 所以 widget 测试里可以直接构造界面。
@@ -11,6 +11,9 @@ import 'call/call_service.dart';
 import 'call/call_transport.dart';
 import 'call/webrtc_call_media.dart';
 import 'contact/contact.dart';
+import 'files/file_relay_api.dart';
+import 'files/file_relay_transfer.dart';
+import 'files/file_share_service.dart';
 import 'identity/identity_store.dart';
 import 'messaging/messaging_service.dart';
 import 'pairing/pairing_manager.dart';
@@ -40,6 +43,12 @@ class AppServices {
     identityManager: identityManager,
     myName: () async => await SettingsStore.get(SettingsStore.displayName) ?? '',
     onContact: _onContact,
+  );
+
+  /// 文件：内容加密后经中继的文件接口传输，文件描述走 [messaging] 的加密消息。
+  late final FileShareService files = FileShareService(
+    messaging: messaging,
+    transfer: FileRelayTransfer(HttpFileRelay(AppConfig.relayUri)),
   );
 
   /// 语音通话。信令走 [messaging] 的加密临时消息，音频走 WebRTC。
@@ -106,6 +115,7 @@ class AppServices {
 
   /// 删除联系人及其本地消息。
   Future<void> removeContact(Contact contact) async {
+    files.cancelSession(contact.sessionId);
     await messaging.forget(contact);
     await ContactStore.deleteContact(contact.deviceId);
   }
@@ -119,6 +129,7 @@ class AppServices {
     await calls.decline();
     calls.dismiss();
     await pairing.reset();
+    files.reset();
     await messaging.reset();
     await AppDatabase.destroy();
     await identityManager.reset();

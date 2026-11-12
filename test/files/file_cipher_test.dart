@@ -386,6 +386,91 @@ void main() {
       }
     });
 
+    test('close 保留临时文件，重新 open 后续传', () async {
+      final content = _pattern(_mib + 100);
+      final file = await source(content);
+      final keys = FileKeys.random();
+      final chunks = await sealAll(file, keys);
+      final hash = await FileCipher.hashFile(file);
+      final target = File('${dir.path}/out.bin');
+
+      final first = await FileReceiver.open(target: target, keys: keys, size: content.length, hash: hash);
+      await first.addChunk(0, chunks[0]);
+      await first.close();
+      await first.close(); // 重复调用无效果
+      expect(await partOf(target).length(), _mib);
+      await expectLater(first.addChunk(1, chunks[1]), throwsStateError);
+      await expectLater(first.finish(), throwsStateError);
+      await first.abort(); // 已关闭：不删临时文件
+      expect(await partOf(target).exists(), isTrue);
+
+      final second = await FileReceiver.open(target: target, keys: keys, size: content.length, hash: hash);
+      expect(second.nextIndex, 1);
+      await second.addChunk(1, chunks[1]);
+      await second.finish();
+      expect(await target.readAsBytes(), content);
+    });
+
+    test('临时文件长度等于 size：所有块都已写完，直接 finish', () async {
+      for (final size in [_mib + 100, 2 * _mib]) {
+        final content = _pattern(size);
+        final file = await source(content);
+        final keys = FileKeys.random();
+        final chunks = await sealAll(file, keys);
+        final hash = await FileCipher.hashFile(file);
+        final target = File('${dir.path}/out.bin');
+
+        final first = await FileReceiver.open(target: target, keys: keys, size: size, hash: hash);
+        for (var i = 0; i < chunks.length; i++) {
+          await first.addChunk(i, chunks[i]);
+        }
+        await first.close();
+
+        final second = await FileReceiver.open(target: target, keys: keys, size: size, hash: hash);
+        expect(second.nextIndex, second.chunkCount, reason: '大小 $size');
+        await expectLater(second.addChunk(0, chunks[0]), throwsStateError);
+        await second.finish();
+        expect(await target.readAsBytes(), content);
+        await target.delete();
+      }
+    });
+
+    test('临时文件长度等于 size 但内容不对：finish 校验失败并删除', () async {
+      final content = _pattern(_mib + 100);
+      final file = await source(content);
+      final target = File('${dir.path}/out.bin');
+      await partOf(target).writeAsBytes(Uint8List(content.length), flush: true);
+      final receiver = await FileReceiver.open(
+        target: target,
+        keys: FileKeys.random(),
+        size: content.length,
+        hash: await FileCipher.hashFile(file),
+      );
+      expect(receiver.nextIndex, receiver.chunkCount);
+      await expectLater(receiver.finish(), throwsA(isA<FileCipherException>()));
+      expect(await partOf(target).exists(), isFalse);
+      expect(await target.exists(), isFalse);
+    });
+
+    test('空文件：已有的空临时文件仍要收第 0 块', () async {
+      final file = await source(Uint8List(0));
+      final keys = FileKeys.random();
+      final chunks = await sealAll(file, keys);
+      final target = File('${dir.path}/out.bin');
+      await partOf(target).writeAsBytes(const [], flush: true);
+      final receiver = await FileReceiver.open(
+        target: target,
+        keys: keys,
+        size: 0,
+        hash: await FileCipher.hashFile(file),
+      );
+      expect(receiver.nextIndex, 0);
+      await expectLater(receiver.finish(), throwsStateError);
+      await receiver.addChunk(0, chunks[0]);
+      await receiver.finish();
+      expect(await target.length(), 0);
+    });
+
     test('哈希不符时 finish 失败并删除临时文件', () async {
       final file = await source(_pattern(_mib + 100));
       final keys = FileKeys.random();
