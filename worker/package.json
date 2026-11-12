@@ -1,5 +1,5 @@
 {
-  "name": "whisper-webrtc-spike-signaling",
+  "name": "whisper-relay",
   "private": true,
   "type": "module",
   "scripts": {

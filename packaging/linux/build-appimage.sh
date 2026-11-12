@@ -16,10 +16,7 @@ mkdir -p $BUILD_DIR/$PKG_NAME.AppDir/usr/share/applications
 mkdir -p $BUILD_DIR/$PKG_NAME.AppDir/usr/share/icons/hicolor/256x256/apps
 
 # 复制 Flutter 构建产物
-if [ -d "spike/client/build/linux/x64/release/bundle" ]; then
-    cp -r spike/client/build/linux/x64/release/bundle/* $BUILD_DIR/$PKG_NAME.AppDir/usr/bin/
-    chmod +x $BUILD_DIR/$PKG_NAME.AppDir/usr/bin/*
-elif [ -d "build/linux/x64/release/bundle" ]; then
+if [ -d "build/linux/x64/release/bundle" ]; then
     cp -r build/linux/x64/release/bundle/* $BUILD_DIR/$PKG_NAME.AppDir/usr/bin/
     chmod +x $BUILD_DIR/$PKG_NAME.AppDir/usr/bin/*
 else
@@ -31,7 +28,7 @@ fi
 cat > $BUILD_DIR/$PKG_NAME.AppDir/AppRun << 'APPRUN'
 #!/bin/bash
 cd "$(dirname "$0")"
-exec ./usr/bin/whisper_webrtc_spike "$@"
+exec ./usr/bin/whisper "$@"
 APPRUN
 chmod +x $BUILD_DIR/$PKG_NAME.AppDir/AppRun
 
@@ -40,7 +37,7 @@ cat > $BUILD_DIR/$PKG_NAME.AppDir/usr/share/applications/whisper.desktop << EOF
 [Desktop Entry]
 Name=耳语 Whisper
 Comment=端到端加密聊天与语音客户端
-Exec=whisper_webrtc_spike
+Exec=whisper
 Icon=whisper
 Terminal=false
 Type=Application

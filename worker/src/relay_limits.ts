@@ -52,3 +52,14 @@ export const FILE_SESSION_QUOTA_BYTES = 1024 * 1024 * 1024;
 /** 每个会话的文件接口限速：窗口内最多处理的请求次数（PUT/GET/DELETE 都计数）。 */
 export const FILE_RATE_LIMIT_WINDOW_MS = 10_000;
 export const FILE_RATE_LIMIT_MAX_REQUESTS = 60;
+
+export type SessionAuth = { sessionId: string; peer: "a" | "b" };
+
+/** Authorization: Whisper <sessionId> <peer>；不合格返回 null。 */
+export function parseSessionAuth(request: Request): SessionAuth | null {
+  const header = request.headers.get("authorization");
+  if (!header) return null;
+  const match = /^Whisper ([A-Za-z0-9_-]{22,64}) ([ab])$/.exec(header);
+  if (!match || !RELAY_ID.test(match[1])) return null;
+  return { sessionId: match[1], peer: match[2] as "a" | "b" };
+}

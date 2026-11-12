@@ -5,7 +5,7 @@
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "TommyDeng"
 #define MyAppURL "https://github.com/TommyDeng/Whisper"
-#define MyAppExeName "whisper_webrtc_spike.exe"
+#define MyAppExeName "whisper.exe"
 
 [Setup]
 AppId={{7A1F2B3C-4D5E-6F7A-8B9C-0D1E2F3A4B5C}}

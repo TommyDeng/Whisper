@@ -122,6 +122,9 @@ export class SessionDO extends DurableObject<Env> {
     if (request.method === "POST" && url.pathname === "/file-auth") {
       return this.authorizeFile(request);
     }
+    if (request.method === "POST" && url.pathname === "/turn-auth") {
+      return this.authorizeTurn(request);
+    }
     const peerParam = url.searchParams.get("peer");
     if (peerParam !== "a" && peerParam !== "b") {
       return Response.json({ ok: false, error: "bad-peer" }, { status: 400 });
@@ -389,6 +392,27 @@ export class SessionDO extends DurableObject<Env> {
     await this.scheduleAlarm();
   }
 
+  /** 内部接口：确认该 peer 当前在线。只由 Worker 通过 DO 绑定发起。 */
+  private async authorizeTurn(request: Request): Promise<Response> {
+    let parsed: unknown;
+    try {
+      parsed = await request.json();
+    } catch {
+      return Response.json({ ok: false, error: "bad-request" }, { status: 400 });
+    }
+    if (!parsed || typeof parsed !== "object") {
+      return Response.json({ ok: false, error: "bad-request" }, { status: 400 });
+    }
+    const peer = (parsed as { peer?: unknown }).peer;
+    if (peer !== "a" && peer !== "b") {
+      return Response.json({ ok: false, error: "bad-peer" }, { status: 400 });
+    }
+    if (this.onlinePeers(peer).length === 0) {
+      return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+    }
+    return Response.json({ ok: true });
+  }
+
   /** 文件接口内部记账：按会话限速并维护当前占用。约定见 docs/file-relay.md。 */
   private async authorizeFile(request: Request): Promise<Response> {
     let parsed: unknown;
@@ -504,6 +528,38 @@ export async function authorizeSessionFile(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
+    }),
+  );
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { ok: false, error: "failed", status: 502 };
+  }
+  if (response.ok && body && typeof body === "object" && (body as { ok?: unknown }).ok === true) {
+    return { ok: true };
+  }
+  const error =
+    body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+      ? (body as { error: string }).error
+      : "failed";
+  return { ok: false, error, status: response.status || 502 };
+}
+
+export type TurnAuthResult = { ok: true } | { ok: false; error: string; status: number };
+
+/** 确认该会话的这个 peer 当前在线。只从 Worker 内部调用。 */
+export async function authorizeSessionTurn(
+  sessions: DurableObjectNamespace<SessionDO>,
+  sessionId: string,
+  peer: "a" | "b",
+): Promise<TurnAuthResult> {
+  const stub = sessions.get(sessions.idFromName(sessionId));
+  const response = await stub.fetch(
+    new Request("https://session/turn-auth", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ peer }),
     }),
   );
   let body: unknown;

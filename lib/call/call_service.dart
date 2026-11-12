@@ -156,7 +156,7 @@ class CallService {
   final CallTransport transport;
 
   /// 每通通话调用一次，新建它的音频连接。
-  final CallMedia Function() createMedia;
+  final CallMedia Function(Contact contact) createMedia;
 
   /// 呼出后对方不接、或来电自己不接，超过这么久就结束。
   final Duration ringTimeout;
@@ -224,7 +224,7 @@ class CallService {
     ));
 
     try {
-      final media = createMedia();
+      final media = createMedia(contact);
       _media = media;
       _subscribeMedia(media, callId);
       final sdp = await media.createOffer();
@@ -269,7 +269,7 @@ class CallService {
     _ringTimer = null;
 
     try {
-      final media = createMedia();
+      final media = createMedia(contact);
       _media = media;
       _subscribeMedia(media, callId);
       if (_snapshot.muted) media.setMuted(true);

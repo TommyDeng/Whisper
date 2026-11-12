@@ -17,10 +17,7 @@ mkdir -p $BUILD_DIR/$PKG_NAME-$VERSION/DEBIAN
 
 # 复制 Flutter 构建产物
 echo "Copying Flutter build artifacts..."
-if [ -d "spike/client/build/linux/x64/release/bundle" ]; then
-    cp -r spike/client/build/linux/x64/release/bundle/* $BUILD_DIR/$PKG_NAME-$VERSION/usr/bin/
-    chmod +x $BUILD_DIR/$PKG_NAME-$VERSION/usr/bin/*
-elif [ -d "build/linux/x64/release/bundle" ]; then
+if [ -d "build/linux/x64/release/bundle" ]; then
     cp -r build/linux/x64/release/bundle/* $BUILD_DIR/$PKG_NAME-$VERSION/usr/bin/
     chmod +x $BUILD_DIR/$PKG_NAME-$VERSION/usr/bin/*
 else

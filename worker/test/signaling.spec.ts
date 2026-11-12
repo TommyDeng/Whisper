@@ -40,7 +40,7 @@ describe("signaling relay", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       ok: true,
-      service: "whisper-webrtc-spike",
+      service: "whisper-relay",
     });
   });
 

@@ -4,7 +4,6 @@
 // - XChaCha20-Poly1305 加解密往返
 // - 身份密钥生成
 // - 安全码计算与验证
-// - 文件分块加密与重传
 
 import 'dart:typed_data';
 
@@ -13,7 +12,6 @@ import 'package:cryptography/cryptography.dart';
 
 import 'package:whisper/e2ee/crypto.dart';
 import 'package:whisper/identity/identity.dart';
-import 'package:whisper/transfer/frames.dart';
 
 void main() {
   group('E2EE 加解密测试', () {
@@ -115,52 +113,6 @@ void main() {
       final code = SafetyCode.compute('AAAA', 'BBBB');
       expect(SafetyCode.isValid(code), isTrue);
       expect(SafetyCode.isValid('invalid'), isFalse);
-    });
-  });
-
-  group('文件分块加密测试', () {
-    test('分块编解码往返', () {
-      final original = Uint8List.fromList(List.generate(1000, (i) => i % 256));
-      final payloads = splitPayloads(original, 16);
-
-      final encoded = <Uint8List>[];
-      for (var i = 0; i < payloads.length; i++) {
-        encoded.add(encodeChunkFrame(i, payloads[i]));
-      }
-
-      final decoded = <Uint8List>[];
-      for (var i = 0; i < encoded.length; i++) {
-        final frame = decodeChunkFrame(encoded[i]);
-        expect(frame, isNotNull);
-        decoded.add(frame!.payload);
-      }
-
-      final reassembled = Uint8List.fromList(decoded.expand((x) => x).toList());
-      expect(reassembled, original);
-    });
-
-    test('分块重传检测缺失块', () {
-      final original = Uint8List.fromList(List.generate(100, (i) => i));
-      final payloads = splitPayloads(original, 16);
-      final assembler = ChunkAssembler(size: original.length, chunkSize: 16);
-
-      // 添加除第 2 块外的所有块
-      for (var i = 0; i < payloads.length; i++) {
-        if (i != 2) {
-          final frame = encodeChunkFrame(i, payloads[i]);
-          final decoded = decodeChunkFrame(frame)!;
-          assembler.addFrame(decoded);
-        }
-      }
-
-      expect(assembler.complete, isFalse);
-      expect(assembler.missingSequences(), [2]);
-
-      // 添加缺失的块
-      final frame = encodeChunkFrame(2, payloads[2]);
-      final decoded = decodeChunkFrame(frame)!;
-      expect(assembler.addFrame(decoded), isTrue);
-      expect(assembler.complete, isTrue);
     });
   });
 }

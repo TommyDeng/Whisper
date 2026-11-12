@@ -11,24 +11,21 @@
 | 1 | 中继、配对、端到端加密文本 | 已合并 |
 | 2 | 本地历史与 7 天保留 | 已合并 |
 | 3 | 语音通话 + TURN | 已合并；跨机器验收留给用户自己做 |
-| 4 | 文件：先做经 R2 中转（≤100 MiB），再做大文件直传 | 中转已合并并已部署；大文件直传已在本 PR 完成（合并后代码齐；端到端验收留给用户） |
+| 4 | 文件：先做经 R2 中转（≤100 MiB），再做大文件直传 | 已合并（中转已部署；大文件直传 PR #30；端到端验收留给用户） |
 | 5 | 打包发布 | 未开始 |
 
 ## 现在在哪
 
-`main` 上里程碑 4 第一阶段已经做完并上线：
+里程碑 1–4 的代码已在 `main` 上合并。中转文件已部署（`whisper-files` 桶 + Worker `whisper-relay`）。语音、中转文件、大文件直传的端到端验收留给用户在两台电脑上做。
 
-- 任务 1–4（Worker 文件接口、分块加密、上传下载、界面）和鉴权配额已合并（PR #26–#29）。
-- Cloudflare 上已建 `whisper-files` 桶（7 天自动删除），Worker `whisper-relay` 已从 `main` 部署。端到端验收留给用户在两台电脑上互发文件。
-- `main` 基线：`flutter analyze --no-fatal-infos lib test` 18 条 info；`flutter test` 345 个；`worker/` 下 `npm run typecheck` 通过、`npm test` 75 个。
+本 PR（分支 `chore/retire-spike-code`）清理早期验证代码，并把可执行文件 / 窗口标题 / 健康检查改成正式名「耳语 / whisper」。`/turn-credentials` 改为复用文件接口的会话身份鉴权（该 peer 须当前在线）。**合并后需要重新部署 Worker，鉴权才会在线上生效**；本 PR 不部署、不建云资源。`spike/` 目录未改，也不要改。
 
-本 PR（分支 `feat/file-direct`）完成里程碑 4 第二阶段：超过 100 MiB 的文件走 WebRTC 数据通道点对点直传。设计和可检查要求在 `docs/file-direct.md`。≤ 100 MiB 仍走 R2，行为不变。本阶段不改 `worker/`，不需要部署 Worker，也不建新的云资源。合并后 `flutter test` 基线为 376 个；analyze 仍是 18 条 info。
+本 PR 检查：`flutter analyze --no-fatal-infos lib test` 13 条 info（不超过 18），无 warning/error；`flutter test` 369 个全过；`worker/` 下 `npm run typecheck` 通过、`npm test` 77 个。
 
 ## 之后的事
 
-- 直传的遗留（见 `docs/file-direct.md` 文末）：断点续传、暂停/继续、接收前磁盘空间检查、多通道并行；以及把 ≤100 MiB 且直连可用的文件也改走直传（产品文档里的“直连优先”）。
 - 里程碑 5：发布。GPG 等密钥由用户自己在 GitHub Actions 里填。
-- 零碎：`/turn-credentials` 没有鉴权，可以加固；早期验证代码还没清（`lib/session/call_controller.dart`、`lib/voice/voice_page.dart`、`lib/files/file_transfer_service.dart`、`lib/files/file_config.dart`、`lib/transfer/*`、健康检查里的 `whisper-webrtc-spike` 字样、可执行文件名）。`spike/` 目录不参与检查，不要改。
+- 直传的遗留（见 `docs/file-direct.md` 文末）：断点续传、暂停/继续、接收前磁盘空间检查、多通道并行；以及把 ≤100 MiB 且直连可用的文件也改走直传（产品文档里的“直连优先”）。
 - 远端有两个已合并的分支没删：`chore/retire-agent-pipeline`、`feat/file-relay-foundation`，留给用户处理。
 
 ## 规矩
@@ -48,7 +45,7 @@
 
 - `npx wrangler types` 会把本机 `.dev.vars` 里的变量名写进 `worker/worker-configuration.d.ts`。跑完用 `git checkout worker/worker-configuration.d.ts` 还原。
 - CI 有四个任务（signaling、flutter-test、build-linux、build-windows）。build-linux 偶尔因为运行器装系统库时域名解析失败而挂，和改动无关，`gh run rerun <id> --failed` 重跑即可。
-- `FileTransferService` 这个名字被早期验证代码占了（`lib/files/file_transfer_service.dart`，由 `lib/files/files.dart` 导出）。新代码不要用这个名字，也不要从 `files.dart` 导入。
+- 早期验证用的 `FileTransferService`（以及 `lib/files/files.dart`、`lib/transfer/*`）已经删掉。新代码不要再引入这个名字。文件功能走 `FileShareService`。
 - 一次 `db.execute` 只放一条 SQL 语句。改表结构在 `AppDatabase._ensureSchema` 里做成幂等的，并把 `schemaVersion` 加一。
 - 测试不访问外网：消息用 `test/relay/fake_relay.dart`，文件用 `test/files/fake_file_relay.dart`，直传用 `test/files/fake_file_link.dart` 和 `test/files/fake_file_direct_transport.dart`，HTTP 客户端对着本机回环上的 `HttpServer` 测。
 
