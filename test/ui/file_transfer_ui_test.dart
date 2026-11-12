@@ -22,6 +22,7 @@ import '../files/fake_file_relay.dart';
 import '../relay/fake_relay.dart';
 
 const _sessionId = 'session-0000000000000000000001';
+const _auth = FileRelayAuth(sessionId: _sessionId, peer: 'a');
 const _codes = [
   'too-large',
   'network',
@@ -312,7 +313,7 @@ void main() {
       String name = 'from-bob.bin',
     ]) async {
       final file = await source(size, name);
-      final offer = await transfer.upload(file);
+      final offer = await transfer.upload(file, auth: _auth);
       fileRelay.calls.clear();
       return (offer: offer, file: file);
     }

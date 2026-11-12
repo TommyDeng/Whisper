@@ -60,6 +60,7 @@ class FileRelayTransfer {
   /// 加密上传 [file]，返回发给对方的 [FileOffer]。失败或取消时尽力删除已上传的块。
   Future<FileOffer> upload(
     File file, {
+    required FileRelayAuth auth,
     CancelToken? cancel,
     TransferProgress? onProgress,
   }) async {
@@ -83,7 +84,7 @@ class FileRelayTransfer {
           throw const FileTransferException('changed'); // 文件变短了
         }
         attempted = true;
-        await _withRetry(() => api.putChunk(fileId, index, sealed), cancel);
+        await _withRetry(() => api.putChunk(fileId, index, sealed, auth), cancel);
         onProgress?.call(
           index == count - 1 ? size : (index + 1) * FileCipher.chunkSize,
           size,
@@ -101,7 +102,7 @@ class FileRelayTransfer {
         hash: hash,
       );
     } catch (error) {
-      if (attempted) await discard(fileId);
+      if (attempted) await discard(fileId, auth: auth);
       if (error is FileSystemException) {
         throw const FileTransferException('changed');
       }
@@ -114,6 +115,7 @@ class FileRelayTransfer {
   Future<File> download(
     FileOffer offer,
     File target, {
+    required FileRelayAuth auth,
     CancelToken? cancel,
     TransferProgress? onProgress,
   }) async {
@@ -132,13 +134,13 @@ class FileRelayTransfer {
       while (receiver.nextIndex < receiver.chunkCount) {
         final index = receiver.nextIndex;
         _check(cancel);
-        var sealed = await _withRetry(() => api.getChunk(offer.fileId, index), cancel);
+        var sealed = await _withRetry(() => api.getChunk(offer.fileId, index, auth), cancel);
         try {
           await receiver.addChunk(index, sealed);
         } on FileCipherException {
           // 可能是传输中损坏：重新下载这一块一次
           _check(cancel);
-          sealed = await _withRetry(() => api.getChunk(offer.fileId, index), cancel);
+          sealed = await _withRetry(() => api.getChunk(offer.fileId, index, auth), cancel);
           await receiver.addChunk(index, sealed);
         }
         onProgress?.call(done(receiver.nextIndex), offer.size);
@@ -167,14 +169,14 @@ class FileRelayTransfer {
     } on FileCipherException {
       throw const FileTransferException('corrupt');
     }
-    await discard(offer.fileId);
+    await discard(offer.fileId, auth: auth);
     return saved;
   }
 
   /// 尽力删除中继上的文件；失败不报错（7 天后中继自己会清）。
-  Future<void> discard(String fileId) async {
+  Future<void> discard(String fileId, {required FileRelayAuth auth}) async {
     try {
-      await api.deleteFile(fileId);
+      await api.deleteFile(fileId, auth);
     } catch (_) {}
   }
 

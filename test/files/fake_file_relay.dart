@@ -18,15 +18,19 @@ class FakeFileRelay implements FileRelayApi {
 
   int count(String call) => calls.where((c) => c == call).length;
 
+  FileRelayAuth? lastAuth;
+
   @override
-  Future<void> putChunk(String fileId, int index, Uint8List sealed) async {
+  Future<void> putChunk(String fileId, int index, Uint8List sealed, FileRelayAuth auth) async {
+    lastAuth = auth;
     calls.add('put $index');
     await before?.call('put', index);
     files.putIfAbsent(fileId, () => {})[index] = Uint8List.fromList(sealed);
   }
 
   @override
-  Future<Uint8List> getChunk(String fileId, int index) async {
+  Future<Uint8List> getChunk(String fileId, int index, FileRelayAuth auth) async {
+    lastAuth = auth;
     calls.add('get $index');
     await before?.call('get', index);
     final sealed = files[fileId]?[index];
@@ -36,7 +40,8 @@ class FakeFileRelay implements FileRelayApi {
   }
 
   @override
-  Future<void> deleteFile(String fileId) async {
+  Future<void> deleteFile(String fileId, FileRelayAuth auth) async {
+    lastAuth = auth;
     calls.add('delete');
     await before?.call('delete', -1);
     files.remove(fileId);

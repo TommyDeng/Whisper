@@ -1,6 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  FILE_ID,
+  FILE_RATE_LIMIT_MAX_REQUESTS,
+  FILE_RATE_LIMIT_WINDOW_MS,
+  FILE_SESSION_QUOTA_BYTES,
   isExpired,
+  MAX_FILE_CHUNK_BYTES,
   MAX_FRAME_CHARS,
   MAX_PAYLOAD_CHARS,
   MAX_QUEUED_PER_PEER,
@@ -27,6 +32,33 @@ type Attachment = {
 
 const COUNTER_PREFIX = "seq:";
 const QUEUE_PREFIX = "q:";
+const FILE_USAGE_KEY = "file-usage";
+
+type FileQuotaState = {
+  files: Record<string, { bytes: number; updatedAt: number }>;
+  windowStart: number;
+  count: number;
+};
+
+function emptyFileQuota(): FileQuotaState {
+  return { files: {}, windowStart: 0, count: 0 };
+}
+
+function isFileQuotaState(value: unknown): value is FileQuotaState {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (typeof record.windowStart !== "number" || typeof record.count !== "number") return false;
+  if (!record.files || typeof record.files !== "object") return false;
+  return true;
+}
+
+function usageTotal(files: FileQuotaState["files"]): number {
+  let total = 0;
+  for (const entry of Object.values(files)) {
+    if (entry && typeof entry.bytes === "number") total += entry.bytes;
+  }
+  return total;
+}
 
 function otherPeer(peer: Peer): Peer {
   return peer === "a" ? "b" : "a";
@@ -86,6 +118,10 @@ function allowFrame(ws: WebSocket): boolean {
 export class SessionDO extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // 文件接口的内部记账请求，只由 Worker 通过 DO 绑定发起，不对外暴露。
+    if (request.method === "POST" && url.pathname === "/file-auth") {
+      return this.authorizeFile(request);
+    }
     const peerParam = url.searchParams.get("peer");
     if (peerParam !== "a" && peerParam !== "b") {
       return Response.json({ ok: false, error: "bad-peer" }, { status: 400 });
@@ -349,7 +385,93 @@ export class SessionDO extends DurableObject<Env> {
 
   private async purgeExpired(now: number): Promise<void> {
     await this.cleanExpired(now);
+    await this.purgeExpiredFileUsage(now);
     await this.scheduleAlarm();
+  }
+
+  /** 文件接口内部记账：按会话限速并维护当前占用。约定见 docs/file-relay.md。 */
+  private async authorizeFile(request: Request): Promise<Response> {
+    let parsed: unknown;
+    try {
+      parsed = await request.json();
+    } catch {
+      return Response.json({ ok: false, error: "bad-request" }, { status: 400 });
+    }
+    if (!parsed || typeof parsed !== "object") {
+      return Response.json({ ok: false, error: "bad-request" }, { status: 400 });
+    }
+    const record = parsed as Record<string, unknown>;
+    const fileId = record.fileId;
+    const op = record.op;
+    const bytes = record.bytes;
+    const nowMs = record.nowMs;
+    if (typeof fileId !== "string" || !FILE_ID.test(fileId)) {
+      return Response.json({ ok: false, error: "bad-file-id" }, { status: 400 });
+    }
+    if (op !== "put" && op !== "get" && op !== "delete") {
+      return Response.json({ ok: false, error: "bad-request" }, { status: 400 });
+    }
+    if (typeof bytes !== "number" || !Number.isInteger(bytes) || Math.abs(bytes) > MAX_FILE_CHUNK_BYTES) {
+      return Response.json({ ok: false, error: "bad-request" }, { status: 400 });
+    }
+    if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) {
+      return Response.json({ ok: false, error: "bad-request" }, { status: 400 });
+    }
+
+    const state = await this.purgeExpiredFileUsage(nowMs);
+    let windowStart = state.windowStart;
+    let count = state.count;
+    if (nowMs - windowStart >= FILE_RATE_LIMIT_WINDOW_MS) {
+      windowStart = nowMs;
+      count = 0;
+    }
+    if (count >= FILE_RATE_LIMIT_MAX_REQUESTS) {
+      await this.ctx.storage.put(FILE_USAGE_KEY, { files: state.files, windowStart, count });
+      return Response.json({ ok: false, error: "rate-limited" }, { status: 429 });
+    }
+    count += 1;
+
+    const files = { ...state.files };
+    if (op === "put" && bytes !== 0) {
+      const current = files[fileId]?.bytes ?? 0;
+      const next = current + bytes;
+      const others = usageTotal(files) - current;
+      if (bytes > 0 && others + Math.max(next, 0) > FILE_SESSION_QUOTA_BYTES) {
+        await this.ctx.storage.put(FILE_USAGE_KEY, { files: state.files, windowStart, count });
+        return Response.json({ ok: false, error: "quota-exceeded" }, { status: 413 });
+      }
+      if (next <= 0) {
+        delete files[fileId];
+      } else {
+        files[fileId] = { bytes: next, updatedAt: nowMs };
+      }
+    } else if (op === "delete") {
+      delete files[fileId];
+    }
+
+    await this.ctx.storage.put(FILE_USAGE_KEY, { files, windowStart, count });
+    return Response.json({ ok: true });
+  }
+
+  private async purgeExpiredFileUsage(now: number): Promise<FileQuotaState> {
+    const stored = await this.ctx.storage.get<unknown>(FILE_USAGE_KEY);
+    const state = isFileQuotaState(stored) ? stored : emptyFileQuota();
+    const files: FileQuotaState["files"] = {};
+    let changed = false;
+    for (const [fileId, entry] of Object.entries(state.files)) {
+      if (!entry || typeof entry.bytes !== "number" || typeof entry.updatedAt !== "number") {
+        changed = true;
+        continue;
+      }
+      if (isExpired(entry.updatedAt, now)) {
+        changed = true;
+        continue;
+      }
+      files[fileId] = entry;
+    }
+    const next = { files, windowStart: state.windowStart, count: state.count };
+    if (changed) await this.ctx.storage.put(FILE_USAGE_KEY, next);
+    return next;
   }
 
   private async scheduleAlarm(): Promise<void> {
@@ -366,4 +488,36 @@ export class SessionDO extends DurableObject<Env> {
       await this.ctx.storage.deleteAlarm();
     }
   }
+}
+
+export type FileAuthResult = { ok: true } | { ok: false; error: string; status: number };
+
+/** 向对应会话的 Durable Object 记账。只从 Worker 内部调用。 */
+export async function authorizeSessionFile(
+  sessions: DurableObjectNamespace<SessionDO>,
+  sessionId: string,
+  input: { fileId: string; op: "put" | "get" | "delete"; bytes: number; nowMs: number },
+): Promise<FileAuthResult> {
+  const stub = sessions.get(sessions.idFromName(sessionId));
+  const response = await stub.fetch(
+    new Request("https://session/file-auth", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  );
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { ok: false, error: "failed", status: 502 };
+  }
+  if (response.ok && body && typeof body === "object" && (body as { ok?: unknown }).ok === true) {
+    return { ok: true };
+  }
+  const error =
+    body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string"
+      ? (body as { error: string }).error
+      : "failed";
+  return { ok: false, error, status: response.status || 502 };
 }

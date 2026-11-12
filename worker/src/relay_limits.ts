@@ -45,3 +45,10 @@ export const MAX_FILE_CHUNK_BYTES = 1024 * 1024 + 16;
 export function isExpired(storedAtMs: number, nowMs: number): boolean {
   return nowMs - storedAtMs >= OFFLINE_TTL_MS;
 }
+
+/** 每个会话当前占用的文件密文上限（1 GiB）。见 docs/file-relay.md。 */
+export const FILE_SESSION_QUOTA_BYTES = 1024 * 1024 * 1024;
+
+/** 每个会话的文件接口限速：窗口内最多处理的请求次数（PUT/GET/DELETE 都计数）。 */
+export const FILE_RATE_LIMIT_WINDOW_MS = 10_000;
+export const FILE_RATE_LIMIT_MAX_REQUESTS = 60;
