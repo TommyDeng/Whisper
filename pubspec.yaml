@@ -2,7 +2,7 @@ name: whisper
 description: "耳语 Whisper：端到端加密聊天与语音客户端（Flutter，Windows / Linux 优先）。"
 publish_to: 'none'
 
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ^3.13.7
@@ -13,6 +13,7 @@ dependencies:
   convert: ^3.1.2
   crypto: ^3.0.6
   cryptography: ^2.7.0
+  audioplayers: ^6.5.1
   file_selector: ^1.0.4
   flutter_secure_storage: ^9.0.0
   flutter_webrtc: 1.6.3
@@ -31,6 +32,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/sounds/incoming_ring.wav
+    - assets/sounds/ringback.wav
 
 # sqlite3 用带加密支持的 SQLite3 Multiple Ciphers 构建，本地数据库整库加密
 hooks:

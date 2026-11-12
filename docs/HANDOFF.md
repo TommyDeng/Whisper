@@ -16,21 +16,22 @@
 
 ## 现在在哪
 
-里程碑 1–4 的代码已在 `main` 上合并。中转文件已部署（`whisper-files` 桶 + Worker `whisper-relay`）。语音、中转文件、大文件直传的端到端验收留给用户在两台电脑上做。
+里程碑 1–4 的代码已在 `main` 上合并，`v1.0.1` 已发布。中转文件已部署（`whisper-files` 桶 + Worker `whisper-relay`）。`/turn-credentials` 鉴权已随之后的 Worker 部署生效。语音、中转文件、大文件直传的端到端验收留给用户在两台电脑上做。
 
-早期验证代码已清理（PR #31），可执行文件正式名为 `whisper`。`/turn-credentials` 已加上会话身份鉴权，**合并 #31 后尚未重新部署 Worker，线上鉴权要等所有者部署后才生效**。不要由 Agent 部署，也不要建新的云资源。`spike/` 目录不要改。
+1.0.2（本分支）修三个使用中发现的问题：Windows 窗口标题乱码；Ubuntu→Windows 单向无声（隐藏远端 `RTCVideoRenderer`、显式选择默认扬声器、界面显示本端麦克风电平——**两边能否互相听见，仍需用户在两台电脑上再打一通确认**）；呼入/呼出/等待提示音（自生成 WAV + audioplayers）。不要由 Agent 打 tag 或发布。
 
-本 PR（分支 `feat/packaging-release`）补全里程碑 5：打 `v*` 标签即可由 GitHub Actions 构建 Linux（deb / AppImage / tar.gz）和 Windows（未签名安装器 + 便携 zip），生成 `SHA256SUMS` 和 `SHA256SUMS.asc` 并创建 GitHub Release。密钥名称、填写位置和发第一个版本的步骤见 `docs/release.md`。本 PR 不打 tag、不创建 Release、不填写任何密钥。
+早期验证代码已清理（PR #31），可执行文件正式名为 `whisper`。不要由 Agent 部署，也不要建新的云资源。`spike/` 目录不要改。
 
-检查基线（与 #31 合并后相同，本 PR 不改 `lib/` / `test/` / `worker/`）：`flutter analyze --no-fatal-infos lib test` 13 条 info；`flutter test` 369 个；`worker/` 若未改则不必重跑。
+里程碑 5 的打包与发布流程已在 `main`。打 `v*` 标签即可由 GitHub Actions 构建 Linux（deb / AppImage / tar.gz）和 Windows（未签名安装器 + 便携 zip），生成 `SHA256SUMS` 和 `SHA256SUMS.asc` 并创建 GitHub Release。步骤见 `docs/release.md`。不要由 Agent 打 tag 或创建 Release。
+
+检查基线（本分支）：`flutter analyze --no-fatal-infos lib test` 13 条 info；`flutter test` 379 个。`worker/` 若未改则不必重跑。
 
 ## 之后的事
 
-- 所有者在 GitHub Actions 填 `GPG_PRIVATE_KEY`、`GPG_PASSPHRASE`，把公钥指纹写进 README，再打 `v1.0.1` 发出第一版（`v1.0.0` 标签因发布流程问题未产出 Release，保留不动）。Windows 安装包未签名，需按文档通过 SmartScreen。
-- **重新部署 Worker**，让线上 `/turn-credentials` 鉴权生效（PR #31 已改代码）。
+- `v1.0.1` 已发布；`v1.0.0` 标签因发布流程问题未产出 Release，保留不动。1.0.2 等用户确认（尤其是两端语音）后再打 tag，不要由 Agent 打 tag 或发版。Windows 安装包未签名，需按文档通过 SmartScreen。
 - 直传的遗留（见 `docs/file-direct.md` 文末）：断点续传、暂停/继续、接收前磁盘空间检查、多通道并行；以及把 ≤100 MiB 且直连可用的文件也改走直传（产品文档里的“直连优先”）。
 - 应用内检查 GitHub Releases 新版本尚未做。
-- 语音 / 文件的跨机器端到端验收留给用户。
+- 语音：1.0.2 的单向无声修复需要在 Ubuntu↔Windows 上各呼一次，确认两边都能听见，并确认呼入/呼出提示音。文件的跨机器验收仍留给用户。
 - 远端有两个已合并的分支没删：`chore/retire-agent-pipeline`、`feat/file-relay-foundation`，留给用户处理。
 
 ## 规矩

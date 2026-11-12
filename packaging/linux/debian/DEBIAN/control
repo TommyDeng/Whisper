@@ -3,7 +3,7 @@ Version: @VERSION@
 Section: net
 Priority: optional
 Architecture: amd64
-Depends: libgtk-3-0, libsecret-1-0, libpulse0, libasound2
+Depends: libgtk-3-0, libsecret-1-0, libpulse0, libasound2, libgstreamer1.0-0, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good
 Maintainer: TommyDeng <tommydeng@example.com>
 Description: 耳语 Whisper - 端到端加密聊天与语音客户端
  耳语是一个只给亲友使用的私密通讯工具：端到端加密（E2EE）的文字聊天 + 低延迟实时语音。
