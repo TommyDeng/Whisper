@@ -21,10 +21,26 @@ const String kLocalFileMissing = '本地文件已不在原来的位置。一个�
 /// 自己发出的文件，源文件已经不在原来的位置。
 const String kSourceFileMissing = '源文件已不在原来的位置。';
 
+/// 大文件直传进行中的说明。
+const String kDirectTransferNotice = '正在直传，请双方保持在线。文件不经服务器中转。';
+
+/// 收到直传请求时的说明。
+const String kDirectIncomingNotice =
+    '对方要向你发送一个大文件。双方必须同时在线，文件走点对点直连，不会经过服务器中转。';
+
+/// 直传文件本地已经不在时的说明。
+const String kDirectLocalMissing = '本地文件已不在原来的位置。大文件不会存在服务器上，无法再次下载。';
+
 /// 把传输失败原因变成一句中文人话。未知原因按 [failed] 处理。
 String fileTransferErrorText(String? code) {
   return switch (code) {
     'too-large' => '文件太大，不能超过 100 MB。',
+    'too-large-direct' => '文件太大，不能超过 100 GB。',
+    'offline' => '对方不在线。大文件需要双方同时在线才能直传。',
+    'no-direct' => '当前没有点对点直连（只通了中继），大文件不能经过语音中继传输。',
+    'busy' => '对方正忙，请稍后再试。',
+    'declined' => '对方拒绝了这次文件传输。',
+    'timeout' => '对方没有接受这次传输。',
     'network' => '网络出错，请稍后重试。',
     'not-found' => '文件已过期或已被下载过。$kOneTimeDownloadNotice',
     'corrupt' => '文件在传输中损坏，无法保存。',
@@ -39,7 +55,8 @@ String formatFileSize(int bytes) {
   final n = bytes < 0 ? 0 : bytes;
   if (n < 1024) return '$n B';
   if (n < 1024 * 1024) return '${_oneDecimal(n / 1024)} KB';
-  return '${_oneDecimal(n / (1024 * 1024))} MB';
+  if (n < 1024 * 1024 * 1024) return '${_oneDecimal(n / (1024 * 1024))} MB';
+  return '${_oneDecimal(n / (1024 * 1024 * 1024))} GB';
 }
 
 String _oneDecimal(double value) =>
@@ -116,6 +133,7 @@ class FileUploadTile extends StatelessWidget {
     required this.done,
     required this.total,
     this.error,
+    this.isDirect = false,
     required this.onCancel,
   });
 
@@ -123,6 +141,7 @@ class FileUploadTile extends StatelessWidget {
   final int done;
   final int total;
   final String? error;
+  final bool isDirect;
   final VoidCallback onCancel;
 
   @override
@@ -174,7 +193,15 @@ class FileUploadTile extends StatelessWidget {
                     style: const TextStyle(color: AppTheme.red, fontSize: 12),
                   ),
                 )
-              else
+              else ...[
+                if (isDirect)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 8, bottom: 4),
+                    child: Text(
+                      kDirectTransferNotice,
+                      style: TextStyle(color: AppTheme.darkGray, fontSize: 11),
+                    ),
+                  ),
                 Padding(
                   padding: const EdgeInsets.only(right: 8, top: 4, bottom: 4),
                   child: _ProgressLine(
@@ -183,6 +210,7 @@ class FileUploadTile extends StatelessWidget {
                     color: AppTheme.black,
                   ),
                 ),
+              ],
             ],
           ),
         ),
@@ -198,6 +226,7 @@ class FileMessageBody extends StatelessWidget {
     required this.name,
     required this.size,
     required this.isSent,
+    this.isDirect = false,
     this.localPath,
     this.localMissing = false,
     this.downloadDone,
@@ -213,6 +242,7 @@ class FileMessageBody extends StatelessWidget {
   final String name;
   final int size;
   final bool isSent;
+  final bool isDirect;
   final String? localPath;
   final bool localMissing;
   final int? downloadDone;
@@ -288,10 +318,11 @@ class FileMessageBody extends StatelessWidget {
             style: const TextStyle(color: AppTheme.red, fontSize: 12),
           ),
           const SizedBox(height: 2),
-          Text(
-            kOneTimeDownloadNotice,
-            style: TextStyle(color: muted, fontSize: 11),
-          ),
+          if (!isDirect)
+            Text(
+              kOneTimeDownloadNotice,
+              style: TextStyle(color: muted, fontSize: 11),
+            ),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -326,7 +357,9 @@ class FileMessageBody extends StatelessWidget {
         ] else if (localMissing) ...[
           const SizedBox(height: 6),
           Text(
-            isSent ? kSourceFileMissing : kLocalFileMissing,
+            isSent
+                ? kSourceFileMissing
+                : (isDirect ? kDirectLocalMissing : kLocalFileMissing),
             style: TextStyle(color: muted, fontSize: 11),
           ),
         ] else if (onDownload != null) ...[
@@ -345,6 +378,119 @@ class FileMessageBody extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// 对方发来的大文件直传请求，画在输入栏上方。
+class FileIncomingTile extends StatelessWidget {
+  const FileIncomingTile({
+    super.key,
+    required this.name,
+    required this.size,
+    required this.done,
+    required this.total,
+    this.error,
+    this.needsAccept = false,
+    this.onAccept,
+    this.onDecline,
+    this.onCancel,
+  });
+
+  final String name;
+  final int size;
+  final int done;
+  final int total;
+  final String? error;
+  final bool needsAccept;
+  final VoidCallback? onAccept;
+  final VoidCallback? onDecline;
+  final VoidCallback? onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final failed = error != null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: AppTheme.white,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: failed ? AppTheme.red : AppTheme.lightGray),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    failed ? Icons.error_outline : Icons.download_outlined,
+                    size: 16,
+                    color: failed ? AppTheme.red : AppTheme.darkGray,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      failed
+                          ? '接收失败：$name'
+                          : '收到文件 $name（${formatFileSize(size)}）',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: failed ? AppTheme.red : AppTheme.black,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  if (needsAccept) ...[
+                    TextButton(
+                      onPressed: onDecline,
+                      style: _compactButton(AppTheme.black),
+                      child: const Text('拒绝'),
+                    ),
+                    TextButton(
+                      onPressed: onAccept,
+                      style: _compactButton(AppTheme.black),
+                      child: const Text('接受'),
+                    ),
+                  ] else
+                    TextButton(
+                      onPressed: onCancel,
+                      style: _compactButton(AppTheme.black),
+                      child: Text(failed ? '关闭' : '取消'),
+                    ),
+                ],
+              ),
+              if (failed)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8, bottom: 4),
+                  child: Text(
+                    fileTransferErrorText(error),
+                    style: const TextStyle(color: AppTheme.red, fontSize: 12),
+                  ),
+                )
+              else if (needsAccept)
+                const Padding(
+                  padding: EdgeInsets.only(right: 8, bottom: 4),
+                  child: Text(
+                    kDirectIncomingNotice,
+                    style: TextStyle(color: AppTheme.darkGray, fontSize: 11),
+                  ),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(right: 8, top: 4, bottom: 4),
+                  child: _ProgressLine(
+                    done: done,
+                    total: total,
+                    color: AppTheme.black,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

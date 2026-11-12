@@ -39,7 +39,8 @@ JSON 文本消息：
 ```
 
 - `t`：内容类型。目前有 `text`、`file` 和 `receipt`；`t` 为 `call` 的内容是通话信令，只作为临时消息
-  发送，见 `docs/call-signaling.md`。接收方遇到不认识的类型时确认收到并忽略。
+  发送，见 `docs/call-signaling.md`。`t` 为 `fsig` 的内容是大文件直传信令，同样只作为临时消息发送，
+  见 `docs/file-direct.md`。接收方遇到不认识的类型时确认收到并忽略。
 - `body`：正文，UTF-8 不超过 16 KiB。
 - `ts`：发送方本地时间，unix 毫秒。
 - `burn`：仅文本可选。为 `true` 时表示阅后即焚；缺省或不存在时为 `false`。
@@ -50,7 +51,7 @@ JSON 文件消息（和文本消息一样落库、去重、回 `delivered` 回�
 {"t":"file","body":"<FileOffer 的 JSON 字符串>","ts":1700000000000}
 ```
 
-- `body`：文件的描述（文件 ID、文件名、大小、密钥、哈希），格式见 `docs/file-relay.md` 的“文件消息”，不超过 2048 字节。文件内容本身不在消息里，另经文件中转接口传输。
+- `body`：文件的描述（文件 ID、文件名、大小、密钥、哈希，直传时还有 `via: "direct"`），格式见 `docs/file-relay.md` 的“文件消息”和 `docs/file-direct.md`，不超过 2048 字节。文件内容本身不在消息里：中转走文件接口，大文件走 WebRTC 数据通道。
 - `body` 解不出合格描述的文件消息直接丢弃。文件消息不支持 `burn`。
 
 JSON 回执（和文本消息一样经中继可靠送达）：

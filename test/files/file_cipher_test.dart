@@ -39,7 +39,9 @@ void main() {
 
   Future<List<Uint8List>> sealAll(File file, FileKeys keys) async {
     final count = FileCipher.chunkCount(await file.length());
-    return [for (var i = 0; i < count; i++) await FileCipher.sealChunk(file, keys, i)];
+    return [
+      for (var i = 0; i < count; i++) await FileCipher.sealChunk(file, keys, i),
+    ];
   }
 
   group('FileKeys', () {
@@ -119,7 +121,12 @@ void main() {
       for (var i = 0; i < count; i++) {
         final sealed = await FileCipher.sealChunk(file, keys, i);
         expect(sealed.length, expectedClearLengths[i] + FileCipher.tagLength);
-        final clear = await FileCipher.openChunk(sealed, keys, i, isFinal: i == count - 1);
+        final clear = await FileCipher.openChunk(
+          sealed,
+          keys,
+          i,
+          isFinal: i == count - 1,
+        );
         expect(clear.length, expectedClearLengths[i]);
         out.add(clear);
       }
@@ -174,7 +181,10 @@ void main() {
         );
       }
       // 原样仍可解开
-      expect(await FileCipher.openChunk(sealed, keys, 0, isFinal: true), hasLength(5000));
+      expect(
+        await FileCipher.openChunk(sealed, keys, 0, isFinal: true),
+        hasLength(5000),
+      );
     });
 
     test('调换两块认证失败', () async {
@@ -294,9 +304,15 @@ void main() {
       await receiver.addChunk(0, chunks[0]);
 
       final tampered = Uint8List.fromList(chunks[1])..[10] ^= 0xff;
-      await expectLater(receiver.addChunk(1, tampered), throwsA(isA<FileCipherException>()));
+      await expectLater(
+        receiver.addChunk(1, tampered),
+        throwsA(isA<FileCipherException>()),
+      );
       // 调换：把第 2 块当第 1 块
-      await expectLater(receiver.addChunk(1, chunks[2]), throwsA(isA<FileCipherException>()));
+      await expectLater(
+        receiver.addChunk(1, chunks[2]),
+        throwsA(isA<FileCipherException>()),
+      );
       expect(receiver.nextIndex, 1);
       expect(await partOf(target).length(), _mib);
 
@@ -319,7 +335,10 @@ void main() {
         hash: await FileCipher.hashFile(file),
       );
       expect(receiver.chunkCount, 1);
-      await expectLater(receiver.addChunk(0, chunks[0]), throwsA(isA<FileCipherException>()));
+      await expectLater(
+        receiver.addChunk(0, chunks[0]),
+        throwsA(isA<FileCipherException>()),
+      );
       expect(receiver.nextIndex, 0);
       await receiver.abort();
       expect(await partOf(target).exists(), isFalse);
@@ -394,7 +413,12 @@ void main() {
       final hash = await FileCipher.hashFile(file);
       final target = File('${dir.path}/out.bin');
 
-      final first = await FileReceiver.open(target: target, keys: keys, size: content.length, hash: hash);
+      final first = await FileReceiver.open(
+        target: target,
+        keys: keys,
+        size: content.length,
+        hash: hash,
+      );
       await first.addChunk(0, chunks[0]);
       await first.close();
       await first.close(); // 重复调用无效果
@@ -404,7 +428,12 @@ void main() {
       await first.abort(); // 已关闭：不删临时文件
       expect(await partOf(target).exists(), isTrue);
 
-      final second = await FileReceiver.open(target: target, keys: keys, size: content.length, hash: hash);
+      final second = await FileReceiver.open(
+        target: target,
+        keys: keys,
+        size: content.length,
+        hash: hash,
+      );
       expect(second.nextIndex, 1);
       await second.addChunk(1, chunks[1]);
       await second.finish();
@@ -420,13 +449,23 @@ void main() {
         final hash = await FileCipher.hashFile(file);
         final target = File('${dir.path}/out.bin');
 
-        final first = await FileReceiver.open(target: target, keys: keys, size: size, hash: hash);
+        final first = await FileReceiver.open(
+          target: target,
+          keys: keys,
+          size: size,
+          hash: hash,
+        );
         for (var i = 0; i < chunks.length; i++) {
           await first.addChunk(i, chunks[i]);
         }
         await first.close();
 
-        final second = await FileReceiver.open(target: target, keys: keys, size: size, hash: hash);
+        final second = await FileReceiver.open(
+          target: target,
+          keys: keys,
+          size: size,
+          hash: hash,
+        );
         expect(second.nextIndex, second.chunkCount, reason: '大小 $size');
         await expectLater(second.addChunk(0, chunks[0]), throwsStateError);
         await second.finish();
@@ -510,24 +549,46 @@ void main() {
       await expectLater(receiver.addChunk(1, chunks[1]), throwsStateError);
     });
 
+    test('允许超过中转上限、不超过直传上限的 size', () async {
+      final target = File('${dir.path}/big-ok.bin');
+      final receiver = await FileReceiver.open(
+        target: target,
+        keys: FileKeys.random(),
+        size: FileCipher.maxFileBytes + 1,
+        hash: Uint8List(32),
+      );
+      expect(receiver.chunkCount, 101);
+      await receiver.abort();
+    });
+
     test('size 或 hash 不合格抛 ArgumentError', () async {
       final target = File('${dir.path}/out.bin');
       final keys = FileKeys.random();
       await expectLater(
-        FileReceiver.open(target: target, keys: keys, size: -1, hash: Uint8List(32)),
+        FileReceiver.open(
+          target: target,
+          keys: keys,
+          size: -1,
+          hash: Uint8List(32),
+        ),
         throwsArgumentError,
       );
       await expectLater(
         FileReceiver.open(
           target: target,
           keys: keys,
-          size: FileCipher.maxFileBytes + 1,
+          size: FileCipher.maxDirectFileBytes + 1,
           hash: Uint8List(32),
         ),
         throwsArgumentError,
       );
       await expectLater(
-        FileReceiver.open(target: target, keys: keys, size: 10, hash: Uint8List(31)),
+        FileReceiver.open(
+          target: target,
+          keys: keys,
+          size: 10,
+          hash: Uint8List(31),
+        ),
         throwsArgumentError,
       );
       expect(await partOf(target).exists(), isFalse);

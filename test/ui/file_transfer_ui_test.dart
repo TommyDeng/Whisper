@@ -69,6 +69,12 @@ void main() {
       expect(texts['failed'], '传输失败，请稍后重试。');
       expect(fileTransferErrorText(null), texts['failed']);
       expect(fileTransferErrorText('other'), texts['failed']);
+      expect(fileTransferErrorText('too-large-direct'), '文件太大，不能超过 100 GB。');
+      expect(fileTransferErrorText('offline'), '对方不在线。大文件需要双方同时在线才能直传。');
+      expect(fileTransferErrorText('no-direct'), contains('不能经过语音中继'));
+      expect(fileTransferErrorText('busy'), '对方正忙，请稍后再试。');
+      expect(fileTransferErrorText('declined'), '对方拒绝了这次文件传输。');
+      expect(fileTransferErrorText('timeout'), '对方没有接受这次传输。');
     });
 
     test('文件大小写成短的可读形式', () {
@@ -80,6 +86,9 @@ void main() {
       expect(formatFileSize(10 * 1024), '10 KB');
       expect(formatFileSize(1024 * 1024), '1.0 MB');
       expect(formatFileSize(12 * 1024 * 1024), '12 MB');
+      expect(formatFileSize(1024 * 1024 * 1024), '1.0 GB');
+      expect(formatFileSize(1536 * 1024 * 1024), '1.5 GB');
+      expect(formatFileSize(12 * 1024 * 1024 * 1024), '12 GB');
     });
   });
 
@@ -117,6 +126,63 @@ void main() {
       expect(find.text('网络出错，请稍后重试。'), findsOneWidget);
       await tester.tap(find.widgetWithText(TextButton, '关闭'));
       expect(cancelled, isTrue);
+    });
+
+    testWidgets('直传上传显示双方需在线的说明', (tester) async {
+      await tester.pumpWidget(
+        _wrap(
+          FileUploadTile(
+            name: '电影.mkv',
+            done: 0,
+            total: 2 * 1024 * 1024 * 1024,
+            isDirect: true,
+            onCancel: () {},
+          ),
+        ),
+      );
+      expect(find.text(kDirectTransferNotice), findsOneWidget);
+      expect(find.text('0 B / 2.0 GB'), findsOneWidget);
+    });
+
+    testWidgets('来传待接受时显示说明和接受/拒绝', (tester) async {
+      var accepted = false;
+      var declined = false;
+      await tester.pumpWidget(
+        _wrap(
+          FileIncomingTile(
+            name: '电影.mkv',
+            size: 2 * 1024 * 1024 * 1024,
+            done: 0,
+            total: 2 * 1024 * 1024 * 1024,
+            needsAccept: true,
+            onAccept: () => accepted = true,
+            onDecline: () => declined = true,
+          ),
+        ),
+      );
+      expect(find.text(kDirectIncomingNotice), findsOneWidget);
+      expect(find.textContaining('收到文件 电影.mkv'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, '接受'));
+      expect(accepted, isTrue);
+      await tester.tap(find.widgetWithText(TextButton, '拒绝'));
+      expect(declined, isTrue);
+    });
+
+    testWidgets('直传文件气泡不出现中转下载提示', (tester) async {
+      await tester.pumpWidget(
+        _wrap(
+          FileMessageBody(
+            name: '电影.mkv',
+            size: 2 * 1024 * 1024 * 1024,
+            isSent: false,
+            isDirect: true,
+            localMissing: true,
+          ),
+        ),
+      );
+      expect(find.text(kDirectLocalMissing), findsOneWidget);
+      expect(find.text(kOneTimeDownloadNotice), findsNothing);
+      expect(find.widgetWithText(TextButton, '下载'), findsNothing);
     });
 
     testWidgets('文件气泡：下载说明、已保存、失败原因、本地文件丢失', (tester) async {

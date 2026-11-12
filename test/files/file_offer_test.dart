@@ -7,12 +7,12 @@ import 'package:whisper/files/file_offer.dart';
 
 void main() {
   FileOffer sample({String name = '报告.pdf', int size = 12345}) => FileOffer(
-        fileId: FileOffer.newFileId(),
-        name: name,
-        size: size,
-        keys: FileKeys.random(),
-        hash: Uint8List.fromList(List.generate(32, (i) => i)),
-      );
+    fileId: FileOffer.newFileId(),
+    name: name,
+    size: size,
+    keys: FileKeys.random(),
+    hash: Uint8List.fromList(List.generate(32, (i) => i)),
+  );
 
   Map<String, dynamic> json(FileOffer offer) =>
       jsonDecode(offer.encode()) as Map<String, dynamic>;
@@ -33,17 +33,29 @@ void main() {
     expect(decoded.keys.key, offer.keys.key);
     expect(decoded.keys.noncePrefix, offer.keys.noncePrefix);
     expect(decoded.hash, offer.hash);
-    expect(json(offer).keys.toSet(), {'v', 'id', 'name', 'size', 'key', 'np', 'hash'});
+    expect(json(offer).keys.toSet(), {
+      'v',
+      'id',
+      'name',
+      'size',
+      'key',
+      'np',
+      'hash',
+    });
   });
 
   test('最长的文件名编码后不超过消息正文上限', () {
-    final offer = sample(name: '文' * FileOffer.maxNameLength, size: FileCipher.maxFileBytes);
+    final offer = sample(
+      name: '文' * FileOffer.maxNameLength,
+      size: FileCipher.maxFileBytes,
+    );
     expect(utf8.encode(offer.encode()).length, lessThanOrEqualTo(2048));
   });
 
   test('decode 拒绝不合格的内容', () {
     final good = json(sample());
-    String with_(String key, Object? value) => jsonEncode({...good, key: value});
+    String with_(String key, Object? value) =>
+        jsonEncode({...good, key: value});
     final bad = <String, String>{
       '不是 JSON': 'not json',
       '不是对象': '[1,2]',
@@ -63,7 +75,11 @@ void main() {
       '缺少哈希': with_('hash', null),
     };
     for (final entry in bad.entries) {
-      expect(() => FileOffer.decode(entry.value), throwsFormatException, reason: entry.key);
+      expect(
+        () => FileOffer.decode(entry.value),
+        throwsFormatException,
+        reason: entry.key,
+      );
     }
   });
 
@@ -101,5 +117,66 @@ void main() {
       expect(FileOffer.sanitizeName(name), expected, reason: name);
     });
     expect(sample(name: 'dir/x.txt').safeName, 'x.txt');
+  });
+
+  test('via 缺省为中转，编码不带 via 字段', () {
+    final offer = sample(size: FileCipher.maxFileBytes);
+    expect(offer.via, FileTransferVia.r2);
+    expect(offer.isDirect, isFalse);
+    expect(json(offer).containsKey('via'), isFalse);
+    expect(FileOffer.decode(offer.encode()).via, FileTransferVia.r2);
+  });
+
+  test('via 为 direct 时允许超过中转上限', () {
+    final size = FileCipher.maxFileBytes + 1;
+    final offer = FileOffer(
+      fileId: FileOffer.newFileId(),
+      name: '电影.mkv',
+      size: size,
+      keys: FileKeys.random(),
+      hash: Uint8List.fromList(List.generate(32, (i) => i)),
+      via: FileTransferVia.direct,
+    );
+    expect(offer.isDirect, isTrue);
+    expect(json(offer)['via'], 'direct');
+    final decoded = FileOffer.decode(offer.encode());
+    expect(decoded.via, FileTransferVia.direct);
+    expect(decoded.size, size);
+  });
+
+  test('via 为 direct 时仍拒绝超过 100 GiB 或不合格的 via', () {
+    expect(
+      () => FileOffer(
+        fileId: FileOffer.newFileId(),
+        name: 'a.bin',
+        size: FileCipher.maxDirectFileBytes + 1,
+        keys: FileKeys.random(),
+        hash: Uint8List(32),
+        via: FileTransferVia.direct,
+      ),
+      throwsFormatException,
+    );
+    final good = json(sample());
+    expect(
+      () => FileOffer.decode(jsonEncode({...good, 'via': 'turn'})),
+      throwsFormatException,
+    );
+    expect(
+      () => FileOffer.decode(
+        jsonEncode({
+          ...good,
+          'via': 'direct',
+          'size': FileCipher.maxDirectFileBytes + 1,
+        }),
+      ),
+      throwsFormatException,
+    );
+    // 没有 via 时仍然按中转上限拒绝
+    expect(
+      () => FileOffer.decode(
+        jsonEncode({...good, 'size': FileCipher.maxFileBytes + 1}),
+      ),
+      throwsFormatException,
+    );
   });
 }

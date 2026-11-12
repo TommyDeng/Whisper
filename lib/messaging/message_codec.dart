@@ -23,35 +23,43 @@ class ChatContent {
 
   /// 文本消息。[burn] 为 true 表示阅后即焚。
   const ChatContent.text(this.body, {required this.sentAt, this.burn = false})
-      : type = typeText,
-        receiptKind = null,
-        ids = const [];
+    : type = typeText,
+      receiptKind = null,
+      ids = const [];
 
   /// 回执：[kind] 是 [receiptDelivered] 或 [receiptRead]，[ids] 是被确认的消息 ID。
   const ChatContent.receipt(String kind, this.ids, {required this.sentAt})
-      : type = typeReceipt,
-        body = '',
-        burn = false,
-        receiptKind = kind;
+    : type = typeReceipt,
+      body = '',
+      burn = false,
+      receiptKind = kind;
 
   /// 文件消息：[body] 是 `FileOffer.encode()` 的结果。文件内容另经文件中转接口传输。
   const ChatContent.file(this.body, {required this.sentAt})
-      : type = typeFile,
-        burn = false,
-        receiptKind = null,
-        ids = const [];
+    : type = typeFile,
+      burn = false,
+      receiptKind = null,
+      ids = const [];
 
   /// 通话信令：[body] 是 `CallSignal.encode()` 的结果。只作为临时消息发送，不落库。
   const ChatContent.call(this.body, {required this.sentAt})
-      : type = typeCall,
-        burn = false,
-        receiptKind = null,
-        ids = const [];
+    : type = typeCall,
+      burn = false,
+      receiptKind = null,
+      ids = const [];
+
+  /// 大文件直传信令：[body] 是 `FileDirectSignal.encode()` 的结果。只作为临时消息发送，不落库。
+  const ChatContent.fileSignal(this.body, {required this.sentAt})
+    : type = typeFileSignal,
+      burn = false,
+      receiptKind = null,
+      ids = const [];
 
   static const String typeText = 'text';
   static const String typeFile = 'file';
   static const String typeReceipt = 'receipt';
   static const String typeCall = 'call';
+  static const String typeFileSignal = 'fsig';
 
   static const String receiptDelivered = 'delivered';
   static const String receiptRead = 'read';
@@ -59,7 +67,7 @@ class ChatContent {
   /// 一条回执最多带多少个消息 ID。
   static const int maxReceiptIds = 100;
 
-  /// 内容类型：[typeText]、[typeFile]、[typeReceipt] 或 [typeCall]；不认识的类型由接收方忽略。
+  /// 内容类型：[typeText]、[typeFile]、[typeReceipt]、[typeCall] 或 [typeFileSignal]；不认识的类型由接收方忽略。
   final String type;
   final String body;
 
@@ -152,13 +160,15 @@ class MessageCodec {
         utf8.encode(content.body).length > maxFileBodyBytes) {
       throw ArgumentError('文件描述过长');
     }
-    if (content.type == ChatContent.typeCall &&
+    if ((content.type == ChatContent.typeCall ||
+            content.type == ChatContent.typeFileSignal) &&
         utf8.encode(content.body).length > maxSignalBytes) {
       throw ArgumentError('信令过长');
     }
     if (content.type == ChatContent.typeReceipt) {
       final kind = content.receiptKind;
-      if (kind != ChatContent.receiptDelivered && kind != ChatContent.receiptRead) {
+      if (kind != ChatContent.receiptDelivered &&
+          kind != ChatContent.receiptRead) {
         throw ArgumentError('不合法的回执种类');
       }
       final ids = content.ids;
@@ -182,7 +192,9 @@ class MessageCodec {
       jsonMap['burn'] = true;
     }
     final bytes = utf8.encode(jsonEncode(jsonMap));
-    final padded = Uint8List(((4 + bytes.length + paddingBlock - 1) ~/ paddingBlock) * paddingBlock);
+    final padded = Uint8List(
+      ((4 + bytes.length + paddingBlock - 1) ~/ paddingBlock) * paddingBlock,
+    );
     ByteData.sublistView(padded).setUint32(0, bytes.length);
     padded.setRange(4, 4 + bytes.length, bytes);
 
@@ -242,20 +254,28 @@ class MessageCodec {
       final type = json['t'];
       final body = json['body'];
       final sentAt = json['ts'];
-      if (type is! String || body is! String || sentAt is! int) throw const FormatException();
+      if (type is! String || body is! String || sentAt is! int) {
+        throw const FormatException();
+      }
 
       final burn = json['burn'];
-      if (burn != null && burn is! bool) throw const MessageCodecException('bad-content');
+      if (burn != null && burn is! bool) {
+        throw const MessageCodecException('bad-content');
+      }
 
       if (type == ChatContent.typeReceipt) {
         final kind = json['kind'];
         final ids = json['ids'];
         if (kind is! String) throw const MessageCodecException('bad-content');
-        if (ids is! List || ids.isEmpty || ids.length > ChatContent.maxReceiptIds) {
+        if (ids is! List ||
+            ids.isEmpty ||
+            ids.length > ChatContent.maxReceiptIds) {
           throw const MessageCodecException('bad-content');
         }
         for (final id in ids) {
-          if (id is! String || id.length > 64) throw const MessageCodecException('bad-content');
+          if (id is! String || id.length > 64) {
+            throw const MessageCodecException('bad-content');
+          }
         }
         return ChatContent(
           type: type,
@@ -266,17 +286,26 @@ class MessageCodec {
         );
       }
 
-      return ChatContent(type: type, body: body, sentAt: sentAt, burn: burn == true);
+      return ChatContent(
+        type: type,
+        body: body,
+        sentAt: sentAt,
+        burn: burn == true,
+      );
     } catch (e) {
       if (e is MessageCodecException) rethrow;
       throw const MessageCodecException('bad-content');
     }
   }
 
-  static List<int> _aad(String sessionId, String senderRole, String messageId) =>
-      utf8.encode('whisper/msg/v1\n$sessionId\n$senderRole\n$messageId');
+  static List<int> _aad(
+    String sessionId,
+    String senderRole,
+    String messageId,
+  ) => utf8.encode('whisper/msg/v1\n$sessionId\n$senderRole\n$messageId');
 
-  static String _encode(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');
+  static String _encode(List<int> bytes) =>
+      base64Url.encode(bytes).replaceAll('=', '');
 
   static List<int> _decode(Object? value) {
     if (value is! String) throw const FormatException();
