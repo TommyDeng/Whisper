@@ -64,3 +64,9 @@ spike/signaling/.dev.vars
 .metadata
 LIBWEBRTC_INSTALL.md
 TURN_TEST.ps1
+
+# 本地下载的打包工具（脚本按校验和固定版本）
+packaging/linux/tools/
+packaging/linux/build/
+packaging/windows/output/
+packaging/dist/
