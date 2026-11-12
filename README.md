@@ -4,7 +4,7 @@
 
 产品需求见 [`docs/prd.md`](docs/prd.md)，技术架构见 [`docs/architecture.md`](docs/architecture.md)。安装包发布与校验见 [`docs/release.md`](docs/release.md)。
 
-GPG 发布公钥指纹（所有者生成密钥后填在这里）：_待公布_。
+GPG 发布公钥指纹：`A40E 233E 5951 9F99 D671 77B3 73A3 2114 054E 9B10`（公钥文件：[docs/whisper-release-public.asc](docs/whisper-release-public.asc)，导入：`gpg --import docs/whisper-release-public.asc`）。
 
 本地检查：
 
