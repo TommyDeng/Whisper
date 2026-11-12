@@ -26,7 +26,7 @@
 
 ## 之后的事
 
-- 所有者在 GitHub Actions 填 `GPG_PRIVATE_KEY`、`GPG_PASSPHRASE`，把公钥指纹写进 README，再打 `v1.0.0` 发出第一版。Windows 安装包未签名，需按文档通过 SmartScreen。
+- 所有者在 GitHub Actions 填 `GPG_PRIVATE_KEY`、`GPG_PASSPHRASE`，把公钥指纹写进 README，再打 `v1.0.1` 发出第一版（`v1.0.0` 标签因发布流程问题未产出 Release，保留不动）。Windows 安装包未签名，需按文档通过 SmartScreen。
 - **重新部署 Worker**，让线上 `/turn-credentials` 鉴权生效（PR #31 已改代码）。
 - 直传的遗留（见 `docs/file-direct.md` 文末）：断点续传、暂停/继续、接收前磁盘空间检查、多通道并行；以及把 ≤100 MiB 且直连可用的文件也改走直传（产品文档里的“直连优先”）。
 - 应用内检查 GitHub Releases 新版本尚未做。
