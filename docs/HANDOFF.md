@@ -12,20 +12,25 @@
 | 2 | 本地历史与 7 天保留 | 已合并 |
 | 3 | 语音通话 + TURN | 已合并；跨机器验收留给用户自己做 |
 | 4 | 文件：先做经 R2 中转（≤100 MiB），再做大文件直传 | 已合并（中转已部署；大文件直传 PR #30；端到端验收留给用户） |
-| 5 | 打包发布 | 未开始 |
+| 5 | 打包发布 | 发布流程已在本 PR 完成（填密钥、打 tag 即可出安装包；不要由 Agent 打 tag 或填密钥） |
 
 ## 现在在哪
 
 里程碑 1–4 的代码已在 `main` 上合并。中转文件已部署（`whisper-files` 桶 + Worker `whisper-relay`）。语音、中转文件、大文件直传的端到端验收留给用户在两台电脑上做。
 
-本 PR（分支 `chore/retire-spike-code`）清理早期验证代码，并把可执行文件 / 窗口标题 / 健康检查改成正式名「耳语 / whisper」。`/turn-credentials` 改为复用文件接口的会话身份鉴权（该 peer 须当前在线）。**合并后需要重新部署 Worker，鉴权才会在线上生效**；本 PR 不部署、不建云资源。`spike/` 目录未改，也不要改。
+早期验证代码已清理（PR #31），可执行文件正式名为 `whisper`。`/turn-credentials` 已加上会话身份鉴权，**合并 #31 后尚未重新部署 Worker，线上鉴权要等所有者部署后才生效**。不要由 Agent 部署，也不要建新的云资源。`spike/` 目录不要改。
 
-本 PR 检查：`flutter analyze --no-fatal-infos lib test` 13 条 info（不超过 18），无 warning/error；`flutter test` 369 个全过；`worker/` 下 `npm run typecheck` 通过、`npm test` 77 个。
+本 PR（分支 `feat/packaging-release`）补全里程碑 5：打 `v*` 标签即可由 GitHub Actions 构建 Linux（deb / AppImage / tar.gz）和 Windows（未签名安装器 + 便携 zip），生成 `SHA256SUMS` 和 `SHA256SUMS.asc` 并创建 GitHub Release。密钥名称、填写位置和发第一个版本的步骤见 `docs/release.md`。本 PR 不打 tag、不创建 Release、不填写任何密钥。
+
+检查基线（与 #31 合并后相同，本 PR 不改 `lib/` / `test/` / `worker/`）：`flutter analyze --no-fatal-infos lib test` 13 条 info；`flutter test` 369 个；`worker/` 若未改则不必重跑。
 
 ## 之后的事
 
-- 里程碑 5：发布。GPG 等密钥由用户自己在 GitHub Actions 里填。
+- 所有者在 GitHub Actions 填 `GPG_PRIVATE_KEY`、`GPG_PASSPHRASE`，把公钥指纹写进 README，再打 `v1.0.0` 发出第一版。Windows 安装包未签名，需按文档通过 SmartScreen。
+- **重新部署 Worker**，让线上 `/turn-credentials` 鉴权生效（PR #31 已改代码）。
 - 直传的遗留（见 `docs/file-direct.md` 文末）：断点续传、暂停/继续、接收前磁盘空间检查、多通道并行；以及把 ≤100 MiB 且直连可用的文件也改走直传（产品文档里的“直连优先”）。
+- 应用内检查 GitHub Releases 新版本尚未做。
+- 语音 / 文件的跨机器端到端验收留给用户。
 - 远端有两个已合并的分支没删：`chore/retire-agent-pipeline`、`feat/file-relay-foundation`，留给用户处理。
 
 ## 规矩
@@ -51,4 +56,4 @@
 
 ## 文档索引
 
-`docs/prd.md` 需求；`docs/architecture.md` 和 `docs/decisions.md` 架构与取舍；`docs/relay-protocol.md` 中继协议；`docs/message-format.md` 消息格式；`docs/pairing-payload.md` 配对；`docs/call-signaling.md` 通话信令；`docs/local-storage.md` 本地存储；`docs/file-relay.md` 文件中转；`docs/file-direct.md` 大文件直传。
+`docs/prd.md` 需求；`docs/architecture.md` 和 `docs/decisions.md` 架构与取舍；`docs/relay-protocol.md` 中继协议；`docs/message-format.md` 消息格式；`docs/pairing-payload.md` 配对；`docs/call-signaling.md` 通话信令；`docs/local-storage.md` 本地存储；`docs/file-relay.md` 文件中转；`docs/file-direct.md` 大文件直传；`docs/release.md` 发布与校验。
