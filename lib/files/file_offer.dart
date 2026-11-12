@@ -5,7 +5,10 @@ import 'dart:typed_data';
 import 'file_cipher.dart';
 
 // 文件消息的正文：告诉对方去哪取文件、怎么解密、怎么校验。
-// 格式见 docs/file-relay.md 的“文件消息”。
+// 中转格式见 docs/file-relay.md 的“文件消息”；直传的 via 字段见 docs/file-direct.md。
+
+/// 文件走哪条路径：中转（R2）还是点对点直传。
+enum FileTransferVia { r2, direct }
 
 class FileOffer {
   FileOffer({
@@ -14,6 +17,7 @@ class FileOffer {
     required this.size,
     required this.keys,
     required Uint8List hash,
+    this.via = FileTransferVia.r2,
   }) : hash = Uint8List.fromList(hash) {
     if (!_fileIdPattern.hasMatch(fileId)) {
       throw const FormatException('文件 ID 不合法');
@@ -21,7 +25,10 @@ class FileOffer {
     if (name.isEmpty || name.length > maxNameLength) {
       throw const FormatException('文件名为空或过长');
     }
-    if (size < 0 || size > FileCipher.maxFileBytes) {
+    final maxSize = via == FileTransferVia.direct
+        ? FileCipher.maxDirectFileBytes
+        : FileCipher.maxFileBytes;
+    if (size < 0 || size > maxSize) {
       throw const FormatException('文件大小超出范围');
     }
     if (hash.length != FileCipher.hashLength) {
@@ -34,7 +41,7 @@ class FileOffer {
   static final _fileIdPattern = RegExp(r'^[A-Za-z0-9_-]{43}$');
   static final _random = Random.secure();
 
-  /// 中继上的文件 ID（43 个 URL 安全字符）。
+  /// 中继上的文件 ID（43 个 URL 安全字符）。直传时也用来把收到的文件和事后到达的文件消息对上。
   final String fileId;
 
   /// 发送方给的文件名。不可信，存盘时用 [safeName]。
@@ -47,6 +54,11 @@ class FileOffer {
 
   /// 明文的 BLAKE2b-256。
   final Uint8List hash;
+
+  /// 缺省为中转。直传时为 [FileTransferVia.direct]。
+  final FileTransferVia via;
+
+  bool get isDirect => via == FileTransferVia.direct;
 
   /// 新的文件 ID：32 字节随机数的 base64url。
   static String newFileId() =>
@@ -66,14 +78,15 @@ class FileOffer {
   }
 
   String encode() => jsonEncode({
-        'v': 1,
-        'id': fileId,
-        'name': name,
-        'size': size,
-        'key': _b64(keys.key),
-        'np': _b64(keys.noncePrefix),
-        'hash': _b64(hash),
-      });
+    'v': 1,
+    'id': fileId,
+    'name': name,
+    'size': size,
+    'key': _b64(keys.key),
+    'np': _b64(keys.noncePrefix),
+    'hash': _b64(hash),
+    if (via == FileTransferVia.direct) 'via': 'direct',
+  });
 
   /// 解析文件消息的正文。任何不合格的内容都抛 [FormatException]。
   static FileOffer decode(String body) {
@@ -92,6 +105,7 @@ class FileOffer {
     if (id is! String || name is! String || size is! int) {
       throw const FormatException('字段类型不对');
     }
+    final via = _via(json['via']);
     final key = _bytes(json['key'], FileKeys.keyLength);
     final noncePrefix = _bytes(json['np'], FileKeys.noncePrefixLength);
     final hash = _bytes(json['hash'], FileCipher.hashLength);
@@ -101,7 +115,14 @@ class FileOffer {
       size: size,
       keys: FileKeys(key: key, noncePrefix: noncePrefix),
       hash: hash,
+      via: via,
     );
+  }
+
+  static FileTransferVia _via(Object? value) {
+    if (value == null || value == 'r2') return FileTransferVia.r2;
+    if (value == 'direct') return FileTransferVia.direct;
+    throw const FormatException('via 不认识');
   }
 
   static String _b64(List<int> bytes) =>

@@ -272,6 +272,32 @@ class _ChatScreenState extends State<ChatScreen> {
     await _files.send(widget.contact, File(path));
   }
 
+  Future<void> _acceptIncoming(FileTransferState state) async {
+    final String? path;
+    try {
+      path = await _picker.pickSavePath(suggestedName: state.name);
+    } catch (_) {
+      _toast('无法打开保存对话框。');
+      return;
+    }
+    if (!mounted || path == null || path.isEmpty) return;
+    final target = File(path);
+    try {
+      if (await target.exists()) {
+        if (!mounted) return;
+        final overwrite = await confirmOverwrite(
+          context,
+          p.basename(target.path),
+        );
+        if (!mounted || !overwrite) return;
+      }
+    } on FileSystemException {
+      _toast('无法访问所选的保存位置。');
+      return;
+    }
+    await _files.acceptIncoming(state.id, target);
+  }
+
   Future<void> _download(ChatMessage message) async {
     final offer = message.file;
     if (offer == null) return;
@@ -413,6 +439,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final uploads = _files.uploads(_sessionId);
+    final incoming = _files.incoming(_sessionId);
     return Scaffold(
       appBar: AppBar(
         title: InkWell(
@@ -478,7 +505,27 @@ class _ChatScreenState extends State<ChatScreen> {
               done: state.done,
               total: state.total,
               error: state.error,
+              isDirect: state.isDirect,
               onCancel: () => _files.cancel(state.id),
+            ),
+          for (final state in incoming)
+            FileIncomingTile(
+              key: ValueKey('incoming-${state.id}'),
+              name: state.name,
+              size: state.total,
+              done: state.done,
+              total: state.total,
+              error: state.error,
+              needsAccept: state.needsAccept,
+              onAccept: state.needsAccept
+                  ? () => unawaited(_acceptIncoming(state))
+                  : null,
+              onDecline: state.needsAccept
+                  ? () => _files.declineIncoming(state.id)
+                  : null,
+              onCancel: state.needsAccept
+                  ? null
+                  : () => _files.cancel(state.id),
             ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -597,12 +644,17 @@ class _ChatScreenState extends State<ChatScreen> {
                 name: file.safeName,
                 size: file.size,
                 isSent: message.isSent,
+                isDirect: file.isDirect,
                 localPath: path,
                 localMissing: _pathMissing(path),
                 downloadDone: download?.done,
                 downloadTotal: download?.total,
                 downloadError: download?.error,
-                onDownload: message.isSent || path != null || download != null
+                onDownload:
+                    message.isSent ||
+                        path != null ||
+                        download != null ||
+                        file.isDirect
                     ? null
                     : () => unawaited(_download(message)),
                 onCancelDownload: download != null && !download.failed

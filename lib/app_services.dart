@@ -11,6 +11,9 @@ import 'call/call_service.dart';
 import 'call/call_transport.dart';
 import 'call/webrtc_call_media.dart';
 import 'contact/contact.dart';
+import 'files/file_direct_link.dart';
+import 'files/file_direct_service.dart';
+import 'files/file_direct_transport.dart';
 import 'files/file_relay_api.dart';
 import 'files/file_relay_transfer.dart';
 import 'files/file_share_service.dart';
@@ -28,8 +31,9 @@ class AppServices {
 
   static final AppServices instance = AppServices._();
 
-  late final IdentityManager identityManager =
-      IdentityManager(store: IdentityStore(profile: AppConfig.profile));
+  late final IdentityManager identityManager = IdentityManager(
+    store: IdentityStore(profile: AppConfig.profile),
+  );
 
   late final MessagingService messaging = MessagingService(
     baseUri: AppConfig.relayUri,
@@ -41,14 +45,19 @@ class AppServices {
     baseUri: AppConfig.relayUri,
     connector: connectWebSocket,
     identityManager: identityManager,
-    myName: () async => await SettingsStore.get(SettingsStore.displayName) ?? '',
+    myName: () async =>
+        await SettingsStore.get(SettingsStore.displayName) ?? '',
     onContact: _onContact,
   );
 
-  /// 文件：内容加密后经中继的文件接口传输，文件描述走 [messaging] 的加密消息。
+  /// 文件：小文件经中继的文件接口中转；大文件经 WebRTC 数据通道直传。
   late final FileShareService files = FileShareService(
     messaging: messaging,
     transfer: FileRelayTransfer(HttpFileRelay(AppConfig.relayUri)),
+    direct: FileDirectService(
+      transport: MessagingFileDirectTransport(messaging),
+      createLink: () => WebRtcFileLink(),
+    ),
   );
 
   /// 语音通话。信令走 [messaging] 的加密临时消息，音频走 WebRTC。
@@ -84,8 +93,12 @@ class AppServices {
 
   Future<void> _start() async {
     await _applyRetention();
-    _retentionTimer ??= Timer.periodic(const Duration(hours: 1), (_) => unawaited(_applyRetention()));
+    _retentionTimer ??= Timer.periodic(
+      const Duration(hours: 1),
+      (_) => unawaited(_applyRetention()),
+    );
     calls; // 开始监听来电
+    files; // 开始监听大文件直传
     await messaging.start();
     await pairing.start();
   }

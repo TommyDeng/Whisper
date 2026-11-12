@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
-// 文件中转用的分块加密，约定见 docs/file-relay.md 的“分块与加密”。
+// 文件分块加密，约定见 docs/file-relay.md 的“分块与加密”。直传与中转共用，上限见 maxDirectFileBytes。
 
 /// 一个文件的密钥材料：每个文件随机生成，只通过端到端加密的消息传给对方。
 class FileKeys {
@@ -23,9 +23,13 @@ class FileKeys {
 
   factory FileKeys.random() {
     final random = Random.secure();
-    Uint8List bytes(int length) =>
-        Uint8List.fromList(List<int>.generate(length, (_) => random.nextInt(256)));
-    return FileKeys(key: bytes(keyLength), noncePrefix: bytes(noncePrefixLength));
+    Uint8List bytes(int length) => Uint8List.fromList(
+      List<int>.generate(length, (_) => random.nextInt(256)),
+    );
+    return FileKeys(
+      key: bytes(keyLength),
+      noncePrefix: bytes(noncePrefixLength),
+    );
   }
 
   static const int keyLength = 32;
@@ -49,7 +53,12 @@ class FileCipher {
 
   static const int chunkSize = 1024 * 1024;
   static const int tagLength = 16;
+
+  /// R2 中转的单文件上限。
   static const int maxFileBytes = 100 * 1024 * 1024;
+
+  /// 点对点直传的单文件上限。见 docs/file-direct.md。
+  static const int maxDirectFileBytes = 100 * 1024 * 1024 * 1024;
   static const int hashLength = 32;
 
   static final _aead = Xchacha20.poly1305Aead();
@@ -75,7 +84,11 @@ class FileCipher {
   }
 
   /// 从文件里读出第 index 块并加密，返回密文块。index 越界抛 RangeError。
-  static Future<Uint8List> sealChunk(File file, FileKeys keys, int index) async {
+  static Future<Uint8List> sealChunk(
+    File file,
+    FileKeys keys,
+    int index,
+  ) async {
     final size = await file.length();
     final count = chunkCount(size);
     RangeError.checkValueInInterval(index, 0, count - 1, 'index');
@@ -186,11 +199,19 @@ class FileReceiver {
     required int size,
     required Uint8List hash,
   }) async {
-    if (size < 0 || size > FileCipher.maxFileBytes) {
-      throw ArgumentError.value(size, 'size', '文件大小必须在 0 到 ${FileCipher.maxFileBytes} 之间');
+    if (size < 0 || size > FileCipher.maxDirectFileBytes) {
+      throw ArgumentError.value(
+        size,
+        'size',
+        '文件大小必须在 0 到 ${FileCipher.maxDirectFileBytes} 之间',
+      );
     }
     if (hash.length != FileCipher.hashLength) {
-      throw ArgumentError.value(hash.length, 'hash', '哈希必须是 ${FileCipher.hashLength} 字节');
+      throw ArgumentError.value(
+        hash.length,
+        'hash',
+        '哈希必须是 ${FileCipher.hashLength} 字节',
+      );
     }
     final part = File('${target.path}.part');
     var nextIndex = 0;
@@ -205,7 +226,15 @@ class FileReceiver {
       }
     }
     final raf = await part.open(mode: FileMode.append);
-    return FileReceiver._(target, keys, size, Uint8List.fromList(hash), part, raf, nextIndex);
+    return FileReceiver._(
+      target,
+      keys,
+      size,
+      Uint8List.fromList(hash),
+      part,
+      raf,
+      nextIndex,
+    );
   }
 
   final File target;
@@ -226,56 +255,63 @@ class FileReceiver {
   /// 解密并追加一块。index 必须等于 nextIndex，否则抛 StateError。
   /// 认证失败抛 FileCipherException，且不写入、nextIndex 不变（调用方可以重新下载这一块）。
   Future<void> addChunk(int index, Uint8List sealed) => _exclusive(() async {
-        if (_nextIndex >= chunkCount) {
-          throw StateError('所有块都已写完');
-        }
-        if (index != _nextIndex) {
-          throw StateError('块序号应为 $_nextIndex，收到 $index');
-        }
-        final isFinal = index == chunkCount - 1;
-        final clear = await FileCipher.openChunk(sealed, _keys, index, isFinal: isFinal);
-        final offset = index * FileCipher.chunkSize;
-        final expected = isFinal ? _size - offset : FileCipher.chunkSize;
-        if (clear.length != expected) {
-          throw FileCipherException('第 $index 块长度不对：应为 $expected，实际 ${clear.length}');
-        }
-        try {
-          await _raf.writeFrom(clear);
-          await _raf.flush();
-        } catch (_) {
-          // 写到一半失败：退回到块边界，保证临时文件仍可续传。
-          try {
-            await _raf.truncate(offset);
-          } catch (_) {}
-          rethrow;
-        }
-        _nextIndex = index + 1;
-      });
+    if (_nextIndex >= chunkCount) {
+      throw StateError('所有块都已写完');
+    }
+    if (index != _nextIndex) {
+      throw StateError('块序号应为 $_nextIndex，收到 $index');
+    }
+    final isFinal = index == chunkCount - 1;
+    final clear = await FileCipher.openChunk(
+      sealed,
+      _keys,
+      index,
+      isFinal: isFinal,
+    );
+    final offset = index * FileCipher.chunkSize;
+    final expected = isFinal ? _size - offset : FileCipher.chunkSize;
+    if (clear.length != expected) {
+      throw FileCipherException(
+        '第 $index 块长度不对：应为 $expected，实际 ${clear.length}',
+      );
+    }
+    try {
+      await _raf.writeFrom(clear);
+      await _raf.flush();
+    } catch (_) {
+      // 写到一半失败：退回到块边界，保证临时文件仍可续传。
+      try {
+        await _raf.truncate(offset);
+      } catch (_) {}
+      rethrow;
+    }
+    _nextIndex = index + 1;
+  });
 
   /// 所有块写完后调用：校验总长度和整文件哈希，通过则把临时文件改名为 target 并返回它。
   /// 不通过则删除临时文件并抛 FileCipherException。块没写完时调用抛 StateError。
   Future<File> finish() => _exclusive(() async {
-        if (_nextIndex < chunkCount) {
-          throw StateError('还有块没写完：$_nextIndex / $chunkCount');
-        }
-        _closed = true;
-        await _raf.close();
-        final length = await _part.length();
-        var ok = length == _size;
-        if (ok) {
-          final actual = await FileCipher.hashFile(_part);
-          var diff = 0;
-          for (var i = 0; i < _hash.length; i++) {
-            diff |= actual[i] ^ _hash[i];
-          }
-          ok = diff == 0;
-        }
-        if (!ok) {
-          await _deletePart();
-          throw FileCipherException('文件校验失败：长度或哈希不符');
-        }
-        return _part.rename(target.path);
-      });
+    if (_nextIndex < chunkCount) {
+      throw StateError('还有块没写完：$_nextIndex / $chunkCount');
+    }
+    _closed = true;
+    await _raf.close();
+    final length = await _part.length();
+    var ok = length == _size;
+    if (ok) {
+      final actual = await FileCipher.hashFile(_part);
+      var diff = 0;
+      for (var i = 0; i < _hash.length; i++) {
+        diff |= actual[i] ^ _hash[i];
+      }
+      ok = diff == 0;
+    }
+    if (!ok) {
+      await _deletePart();
+      throw FileCipherException('文件校验失败：长度或哈希不符');
+    }
+    return _part.rename(target.path);
+  });
 
   /// 暂停：关闭但保留临时文件，之后可以重新 [open] 续传。
   Future<void> close() async {
@@ -293,8 +329,12 @@ class FileReceiver {
   }
 
   Future<void> _deletePart() async {
-    if (await _part.exists()) {
-      await _part.delete();
+    try {
+      if (await _part.exists()) {
+        await _part.delete();
+      }
+    } on FileSystemException {
+      // 已经不在了就算删掉了
     }
   }
 

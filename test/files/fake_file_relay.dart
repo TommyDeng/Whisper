@@ -21,7 +21,12 @@ class FakeFileRelay implements FileRelayApi {
   FileRelayAuth? lastAuth;
 
   @override
-  Future<void> putChunk(String fileId, int index, Uint8List sealed, FileRelayAuth auth) async {
+  Future<void> putChunk(
+    String fileId,
+    int index,
+    Uint8List sealed,
+    FileRelayAuth auth,
+  ) async {
     lastAuth = auth;
     calls.add('put $index');
     await before?.call('put', index);
@@ -29,7 +34,11 @@ class FakeFileRelay implements FileRelayApi {
   }
 
   @override
-  Future<Uint8List> getChunk(String fileId, int index, FileRelayAuth auth) async {
+  Future<Uint8List> getChunk(
+    String fileId,
+    int index,
+    FileRelayAuth auth,
+  ) async {
     lastAuth = auth;
     calls.add('get $index');
     await before?.call('get', index);

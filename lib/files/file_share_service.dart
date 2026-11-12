@@ -7,6 +7,9 @@ import '../contact/contact.dart';
 import '../messaging/message_codec.dart';
 import '../messaging/messaging_service.dart';
 import '../storage/local_db.dart';
+import 'file_cipher.dart';
+import 'file_offer.dart';
+import 'file_direct_service.dart';
 import 'file_relay_api.dart';
 import 'file_relay_transfer.dart';
 
@@ -20,13 +23,21 @@ class FileTransferState {
     required this.name,
     required this.total,
     required this.isUpload,
+    this.isDirect = false,
+    this.needsAccept = false,
   });
 
-  /// 上传：本地生成的临时 ID；下载：文件消息的 ID。
+  /// 上传：本地生成的临时 ID；下载或来传：文件消息 ID / 直传 xferId。
   final String id;
   final String sessionId;
   final String name;
   final bool isUpload;
+
+  /// 是否走点对点直传（而不是 R2 中转）。
+  final bool isDirect;
+
+  /// 来传还在等用户选保存位置。
+  final bool needsAccept;
 
   /// 明文字节数。
   final int total;
@@ -43,26 +54,60 @@ class FileTransferState {
 }
 
 class FileShareService {
-  FileShareService({required this.messaging, required this.transfer});
+  FileShareService({
+    required this.messaging,
+    required this.transfer,
+    this.direct,
+    this.directThreshold = FileCipher.maxFileBytes,
+  }) {
+    if (direct != null) {
+      _subs.add(direct!.updates.listen(_onDirectUpdate));
+      _subs.add(messaging.updates.listen(_bindPendingPaths));
+    }
+  }
 
   final MessagingService messaging;
   final FileRelayTransfer transfer;
 
+  /// 大文件直传；为 null 时超过 [directThreshold] 的发送会失败。
+  final FileDirectService? direct;
+
+  /// 大于这个大小的文件走直传。生产默认 100 MiB；测试可改小。
+  final int directThreshold;
+
   final Map<String, FileTransferState> _uploads = {};
   final Map<String, FileTransferState> _downloads = {}; // 以消息 ID 为键
   final _updates = StreamController<String>.broadcast();
+  final _subs = <StreamSubscription<dynamic>>[];
 
   /// 某个会话的传输有变化（开始、进度、结束）时发出它的 sessionId。
   Stream<String> get updates => _updates.stream;
 
   /// 一个会话里进行中和失败的上传，按开始的先后。
   List<FileTransferState> uploads(String sessionId) => [
-        for (final state in _uploads.values)
-          if (state.sessionId == sessionId) state,
-      ];
+    for (final state in _uploads.values)
+      if (state.sessionId == sessionId) state,
+  ];
 
   /// 一条文件消息的下载状态；没在下载（也没有失败记录）时为 null。
   FileTransferState? downloadState(String msgId) => _downloads[msgId];
+
+  /// 一个会话里待接受、进行中或刚失败的大文件来传。
+  List<FileTransferState> incoming(String sessionId) => [
+    for (final item
+        in direct?.incoming(sessionId) ?? const <FileDirectIncoming>[])
+      FileTransferState._(
+          id: item.id,
+          sessionId: item.sessionId,
+          name: item.name,
+          total: item.total,
+          isUpload: false,
+          isDirect: true,
+          needsAccept: item.needsAccept,
+        )
+        .._done = item.done
+        .._error = item.error,
+  ];
 
   /// 一个会话里各条文件消息对应的本地文件：发出的是源文件，收到的是保存位置。
   Future<Map<String, String>> localPaths(String sessionId) =>
@@ -72,28 +117,49 @@ class FileShareService {
   /// 成功返回消息 ID；失败（原因在 [uploads] 的状态里）或被取消返回 null。
   Future<String?> send(Contact contact, File file) async {
     final sessionId = contact.sessionId;
+    final total = await _lengthOrZero(file);
     final state = FileTransferState._(
       id: MessageCodec.newMessageId(),
       sessionId: sessionId,
       name: p.basename(file.path),
-      total: await _lengthOrZero(file),
+      total: total,
       isUpload: true,
+      isDirect: total > directThreshold,
     );
     _uploads[state.id] = state;
     _notify(sessionId);
     try {
-      final auth = _authOf(contact);
-      final offer = await transfer.upload(
-        file,
-        auth: auth,
-        cancel: state._cancel,
-        onProgress: (done, _) => _progress(state, done),
-      );
+      if (state.total > FileCipher.maxDirectFileBytes) {
+        throw const FileTransferException('too-large-direct');
+      }
+      final FileOffer offer;
+      if (state.total > directThreshold) {
+        if (direct == null) throw const FileTransferException('failed');
+        offer = await direct!.send(
+          contact: contact,
+          file: file,
+          cancel: state._cancel,
+          onProgress: (done, _) => _progress(state, done),
+        );
+      } else {
+        final auth = _authOf(contact);
+        offer = await transfer.upload(
+          file,
+          auth: auth,
+          cancel: state._cancel,
+          onProgress: (done, _) => _progress(state, done),
+        );
+      }
       final String msgId;
       try {
         msgId = await messaging.sendFile(contact, offer);
       } catch (_) {
-        await transfer.discard(offer.fileId, auth: auth); // 消息没发出去，对方永远不会来取
+        if (!offer.isDirect) {
+          await transfer.discard(
+            offer.fileId,
+            auth: _authOf(contact),
+          ); // 消息没发出去，对方永远不会来取
+        }
         rethrow;
       }
       await LocalDatabase.setFilePath(msgId, file.absolute.path);
@@ -113,7 +179,11 @@ class FileShareService {
 
   /// 把文件消息 [message] 的文件下载到 [target]（之前中断过就续传）。
   /// 成功返回保存的文件；失败（原因在 [downloadState] 里）或被取消返回 null。
-  Future<File?> download(Contact contact, ChatMessage message, File target) async {
+  Future<File?> download(
+    Contact contact,
+    ChatMessage message,
+    File target,
+  ) async {
     final offer = message.file;
     if (offer == null) throw ArgumentError('不是文件消息');
     final running = _downloads[message.id];
@@ -152,15 +222,38 @@ class FileShareService {
     return null;
   }
 
+  /// 接受一条大文件来传，保存到 [target]。成功返回保存的文件；失败或取消返回 null。
+  Future<File?> acceptIncoming(String id, File target) async {
+    final service = direct;
+    if (service == null) return null;
+    try {
+      final saved = await service.accept(id, target);
+      return saved;
+    } on TransferCancelled {
+      return null;
+    } on FileTransferException {
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 拒绝一条待接受的大文件来传。
+  void declineIncoming(String id) => direct?.decline(id);
+
   /// 取消一次进行中的传输，或清掉一条失败记录。[id] 是 [FileTransferState.id]。
   void cancel(String id) {
     final state = _uploads[id] ?? _downloads[id];
-    if (state == null) return;
-    state._cancel.cancel();
-    if (state.failed) {
-      _remove(state);
-      _notify(state.sessionId);
+    if (state != null) {
+      state._cancel.cancel();
+      if (state.isDirect && state.isUpload) direct?.cancelActive();
+      if (state.failed) {
+        _remove(state);
+        _notify(state.sessionId);
+      }
+      return;
     }
+    direct?.cancel(id);
   }
 
   /// 取消一个会话的全部传输（删除联系人时调用）。
@@ -168,6 +261,7 @@ class FileShareService {
     for (final state in [..._uploads.values, ..._downloads.values]) {
       if (state.sessionId == sessionId) _drop(state);
     }
+    direct?.cancelSession(sessionId);
     _notify(sessionId);
   }
 
@@ -175,6 +269,7 @@ class FileShareService {
   void reset() {
     final all = [..._uploads.values, ..._downloads.values];
     all.forEach(_drop);
+    direct?.reset();
     for (final sessionId in {for (final state in all) state.sessionId}) {
       _notify(sessionId);
     }
@@ -182,7 +277,57 @@ class FileShareService {
 
   Future<void> dispose() async {
     reset();
+    for (final sub in _subs) {
+      await sub.cancel();
+    }
     await _updates.close();
+  }
+
+  void _onDirectUpdate(String sessionId) {
+    _notify(sessionId);
+    unawaited(_bindPendingPaths(sessionId));
+  }
+
+  Future<void> _bindPendingPaths(String sessionId) async {
+    final pending = direct?.pendingPaths;
+    if (pending == null || pending.isEmpty) return;
+    await _bindPendingForSession(sessionId, pending);
+  }
+
+  Future<void> _bindPendingForSession(
+    String sessionId,
+    Map<String, String> pending, {
+    Contact? contact,
+  }) async {
+    Contact? found = contact;
+    if (found == null) {
+      for (final item in await ContactStore.getAllContacts()) {
+        if (item.sessionId == sessionId) {
+          found = item;
+          break;
+        }
+      }
+    }
+    if (found == null) return;
+    List<ChatMessage> messages;
+    try {
+      messages = await messaging.messages(found);
+    } catch (_) {
+      return;
+    }
+    var changed = false;
+    for (final message in messages) {
+      final offer = message.file;
+      if (offer == null) continue;
+      final path = pending[offer.fileId];
+      if (path == null) continue;
+      try {
+        await LocalDatabase.setFilePath(message.id, path);
+        direct?.forgetPendingPath(offer.fileId);
+        changed = true;
+      } catch (_) {}
+    }
+    if (changed) _notify(sessionId);
   }
 
   // ---------------------------------------------------------------------------
