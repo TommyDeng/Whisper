@@ -186,3 +186,49 @@ class FileReceiver {
 ### 完成标准
 
 `flutter analyze --no-fatal-infos lib test` 没有新增问题（基线 18 条 info），`flutter test` 全过（现有 273 个测试不能少）。测试用内存里的假中继和本机回环上的 HTTP 服务，不访问外网。
+
+## 任务 4：文件界面
+
+在聊天界面里选文件发送、看进度、取消、下载和保存。不含直连大文件。
+
+选文件和选保存位置用 Flutter 官方的 `file_selector`（`pubspec.yaml` 里已有，无需新加依赖）。该包装系统对话框，支持 Linux 和 Windows 桌面：`openFile` 选一个要发送的文件，`getSaveLocation` 选保存位置。测试里不调用系统对话框，换成假的实现。
+
+### 发送
+
+- 输入栏有“发送文件”按钮。联系人开着阅后即焚时按钮禁用，并说明“阅后即焚开启时不能发文件。文件消息不支持阅后即焚。”
+- 点按钮用 `openFile` 选一个文件，再调用 `FileShareService.send`。取消选择则什么都不做。
+- 进行中和失败的上传通过 `uploads(sessionId)` 单独画（这时还没有对应的消息），显示文件名、进度、取消；失败时显示对应原因，并可关掉这条记录（`cancel`）。
+- 上传成功后出现一条发出的文件消息，并记下源文件路径。
+
+### 文件消息气泡
+
+- 文件消息不再显示成“[文件] 文件名”。气泡里用 `offer.safeName`（不要用 `offer.name`）、大小和操作。
+- 本地已有路径（`localPaths`）且文件还在：显示“已保存”，可“打开所在位置”。Linux 用 `xdg-open` 打开所在目录，Windows 用 `explorer /select,` 选中该文件。测试里换成可记录调用的假实现。
+- 本地有记录但文件已不在：说明无法再从中继下载（发出的则说明源文件已不在原来的位置）。
+- 还没保存：显示“下载”。下载前界面写明“一个文件只能成功下载一次，下载后中继上就删了。”
+- 下载中：进度和取消。
+- 下载失败：对应原因的中文人话，并可重试或关掉记录。失败时同样说明只能成功下载一次。
+
+### 保存
+
+- 保存位置用 `getSaveLocation`，默认文件名是 `offer.safeName`，不用 `offer.name`。
+- 目标已存在时，弹确认是否覆盖；用户取消则不下载、不覆盖。
+- 下载用 `FileShareService.download`。
+
+### 刷新与失败原因
+
+- 订阅 `FileShareService.updates`，该会话有变化时刷新上传列表、下载状态和本地路径。
+- 失败原因各一句中文：
+  - `too-large`：文件太大，不能超过 100 MB。
+  - `network`：网络出错，请稍后重试。
+  - `not-found`：文件已过期或已被下载过。一个文件只能成功下载一次，下载后中继上就删了。
+  - `corrupt`：文件在传输中损坏，无法保存。
+  - `changed`：源文件在上传过程中被改动或无法读取。
+  - `rejected`：中继拒绝了这次传输。
+  - `failed`：传输失败，请稍后重试。
+
+### 完成标准
+
+- widget 测试覆盖：阅后即焚时禁用发文件、上传进度与失败与取消、文件气泡的下载/进度/已保存/打开位置、覆盖确认、默认文件名用 `safeName`、各失败原因文案、根据 `updates` 刷新。
+- 测试不访问外网：消息用 `test/relay/fake_relay.dart`，文件用 `test/files/fake_file_relay.dart`；选文件、选保存位置和打开所在位置都用假的实现。
+- `flutter analyze --no-fatal-infos lib test` 没有新增问题（基线 18 条 info），`flutter test` 全过（现有 331 个测试不能少）。本任务不改 `worker/`。
