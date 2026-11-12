@@ -1,4 +1,4 @@
-'; 耳语 Whisper Windows 安装脚本（Inno Setup 6）
+; 耳语 Whisper Windows 安装脚本（Inno Setup 6）
 ; 用法：iscc /DMyAppVersion=1.0.0 packaging/windows/installer.iss
 ; 须先运行：flutter build windows --release
 
@@ -49,4 +49,4 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, ''&'', ''&&'')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
