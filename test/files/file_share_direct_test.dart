@@ -114,7 +114,6 @@ void main() {
         connectTimeout: const Duration(seconds: 2),
         progressTimeout: const Duration(seconds: 2),
       ),
-      directThreshold: _threshold,
     );
     bobFiles = FileShareService(
       messaging: bobMessaging,
@@ -126,7 +125,6 @@ void main() {
         connectTimeout: const Duration(seconds: 2),
         progressTimeout: const Duration(seconds: 2),
       ),
-      directThreshold: _threshold,
     );
     dir = await Directory.systemTemp.createTemp('whisper-share-direct-');
   });
@@ -146,18 +144,30 @@ void main() {
     return file;
   }
 
-  test('不超过阈值的文件仍走中转', () async {
+  test('双方在线时小文件也走直传，不上传中转', () async {
     final file = await source('small.bin', _threshold);
-    final id = await aliceFiles.send(bobContact, file);
+    final target = File('${dir.path}/saved-small.bin');
+    final sending = aliceFiles.sendDirect(bobContact, file);
+    await _until(
+      () => bobFiles.incoming(aliceContact.sessionId).isNotEmpty,
+      what: '来传',
+    );
+    final incoming = bobFiles.incoming(aliceContact.sessionId).single;
+    expect(incoming.isDirect, isTrue);
+    final received = bobFiles.acceptIncoming(incoming.id, target);
+    final id = await sending;
+    final saved = await received;
     expect(id, isNotNull);
-    expect(fileRelay.files, isNotEmpty);
+    expect(saved, isNotNull);
+    expect(await saved!.readAsBytes(), await file.readAsBytes());
+    expect(fileRelay.files, isEmpty);
     expect(aliceFiles.uploads(bobContact.sessionId), isEmpty);
   });
 
   test('超过阈值走直传，成功后不把文件传到中转', () async {
     final file = await source('big.bin', _threshold + 1);
     final target = File('${dir.path}/saved.bin');
-    final sending = aliceFiles.send(bobContact, file);
+    final sending = aliceFiles.sendDirect(bobContact, file);
     await _until(
       () => bobFiles.incoming(aliceContact.sessionId).isNotEmpty,
       what: '来传',
@@ -179,19 +189,23 @@ void main() {
     expect(paths[msgId!], file.absolute.path);
   });
 
-  test('没有直传服务时超过阈值失败，且不走中转', () async {
+  test('没有直传服务时 sendDirect 失败；确认后可改走中转', () async {
     await aliceFiles.dispose();
     aliceFiles = FileShareService(
       messaging: aliceMessaging,
       transfer: FileRelayTransfer(fileRelay),
-      directThreshold: _threshold,
     );
     final file = await source('big.bin', _threshold + 1);
-    final id = await aliceFiles.send(bobContact, file);
+    final id = await aliceFiles.sendDirect(bobContact, file);
     expect(id, isNull);
     final state = aliceFiles.uploads(bobContact.sessionId).single;
     expect(state.isDirect, isTrue);
     expect(state.error, 'failed');
     expect(fileRelay.files, isEmpty);
+
+    // 没有直传服务时，不超过中转上限的文件仍可在确认后走中转
+    final relayed = await aliceFiles.sendViaRelay(bobContact, file);
+    expect(relayed, isNotNull);
+    expect(fileRelay.files, isNotEmpty);
   });
 }

@@ -18,20 +18,20 @@
 
 里程碑 1–4 的代码已在 `main` 上合并，`v1.0.1` 已发布。中转文件已部署（`whisper-files` 桶 + Worker `whisper-relay`）。`/turn-credentials` 鉴权已随之后的 Worker 部署生效。语音、中转文件、大文件直传的端到端验收留给用户在两台电脑上做。
 
-1.0.2（本分支）修三个使用中发现的问题：Windows 窗口标题乱码；Ubuntu→Windows 单向无声（隐藏远端 `RTCVideoRenderer`、显式选择默认扬声器、界面显示本端麦克风电平——**两边能否互相听见，仍需用户在两台电脑上再打一通确认**）；呼入/呼出/等待提示音（自生成 WAV + audioplayers）。不要由 Agent 打 tag 或发布。
+1.0.2 仍未发版（版本号保持 `1.0.2+3`）。已合并的修复：Windows 窗口标题乱码；Ubuntu→Windows 单向无声（隐藏远端 `RTCVideoRenderer`、显式选择默认扬声器、界面显示本端麦克风电平——**两边能否互相听见，仍需用户在两台电脑上再打一通确认**）；呼入/呼出/等待提示音。本分支再补三项使用中的改动：通话改为窗口顶部不挡聊天的栏/来电横幅；双方在线时文件一律直传，离线或直连失败须确认后才走中转（≤100 MiB）；对方来信/来文件有提示音（自己发出的不响；通话进行中不响；窗口在前台且正看着该会话时不响）。不要由 Agent 打 tag 或发布。
 
 早期验证代码已清理（PR #31），可执行文件正式名为 `whisper`。不要由 Agent 部署，也不要建新的云资源。`spike/` 目录不要改。
 
 里程碑 5 的打包与发布流程已在 `main`。打 `v*` 标签即可由 GitHub Actions 构建 Linux（deb / AppImage / tar.gz）和 Windows（未签名安装器 + 便携 zip），生成 `SHA256SUMS` 和 `SHA256SUMS.asc` 并创建 GitHub Release。步骤见 `docs/release.md`。不要由 Agent 打 tag 或创建 Release。
 
-检查基线（本分支）：`flutter analyze --no-fatal-infos lib test` 13 条 info；`flutter test` 379 个。`worker/` 若未改则不必重跑。
+检查基线（本分支）：`flutter analyze --no-fatal-infos lib test` 13 条 info；`flutter test` 393 个。`worker/` 若未改则不必重跑。
 
 ## 之后的事
 
-- `v1.0.1` 已发布；`v1.0.0` 标签因发布流程问题未产出 Release，保留不动。1.0.2 等用户确认（尤其是两端语音）后再打 tag，不要由 Agent 打 tag 或发版。Windows 安装包未签名，需按文档通过 SmartScreen。
-- 直传的遗留（见 `docs/file-direct.md` 文末）：断点续传、暂停/继续、接收前磁盘空间检查、多通道并行；以及把 ≤100 MiB 且直连可用的文件也改走直传（产品文档里的“直连优先”）。
+- `v1.0.1` 已发布；`v1.0.0` 标签因发布流程问题未产出 Release，保留不动。1.0.2 等用户确认后再打 tag，不要由 Agent 打 tag 或发版。Windows 安装包未签名，需按文档通过 SmartScreen。
+- 直传的遗留（见 `docs/file-direct.md` 文末）：断点续传、暂停/继续、接收前磁盘空间检查、多通道并行。同一时刻仍只能进行一次直传（第二个文件会 `busy`）。
 - 应用内检查 GitHub Releases 新版本尚未做。
-- 语音：1.0.2 的单向无声修复需要在 Ubuntu↔Windows 上各呼一次，确认两边都能听见，并确认呼入/呼出提示音。文件的跨机器验收仍留给用户。
+- 语音：1.0.2 的单向无声修复需要在 Ubuntu↔Windows 上各呼一次，确认两边都能听见；并确认通话中仍能输入文字和发文件、呼入/呼出提示音、来信提示音。文件路径（在线直传、离线确认后中转）的跨机器验收留给用户。
 - 远端有两个已合并的分支没删：`chore/retire-agent-pipeline`、`feat/file-relay-foundation`，留给用户处理。
 
 ## 规矩

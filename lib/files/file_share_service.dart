@@ -58,7 +58,6 @@ class FileShareService {
     required this.messaging,
     required this.transfer,
     this.direct,
-    this.directThreshold = FileCipher.maxFileBytes,
   }) {
     if (direct != null) {
       _subs.add(direct!.updates.listen(_onDirectUpdate));
@@ -69,19 +68,21 @@ class FileShareService {
   final MessagingService messaging;
   final FileRelayTransfer transfer;
 
-  /// 大文件直传；为 null 时超过 [directThreshold] 的发送会失败。
+  /// 点对点直传；双方在线时优先走这里。为 null 时只能在用户确认后走中转。
   final FileDirectService? direct;
-
-  /// 大于这个大小的文件走直传。生产默认 100 MiB；测试可改小。
-  final int directThreshold;
 
   final Map<String, FileTransferState> _uploads = {};
   final Map<String, FileTransferState> _downloads = {}; // 以消息 ID 为键
   final _updates = StreamController<String>.broadcast();
+  final _incomingArrivals = StreamController<String>.broadcast();
+  final _announcedIncoming = <String, Set<String>>{}; // sessionId → 已提示过的来传 id
   final _subs = <StreamSubscription<dynamic>>[];
 
   /// 某个会话的传输有变化（开始、进度、结束）时发出它的 sessionId。
   Stream<String> get updates => _updates.stream;
+
+  /// 新的直传来传出现（尚待用户接受）时发出它的 sessionId，每个 id 只发一次。
+  Stream<String> get incomingArrivals => _incomingArrivals.stream;
 
   /// 一个会话里进行中和失败的上传，按开始的先后。
   List<FileTransferState> uploads(String sessionId) => [
@@ -113,9 +114,17 @@ class FileShareService {
   Future<Map<String, String>> localPaths(String sessionId) =>
       LocalDatabase.getFilePaths(sessionId);
 
-  /// 把 [file] 传到中继并给 [contact] 发一条文件消息。
+  /// 经 WebRTC 数据通道把 [file] 发给 [contact]，成功后再发一条文件消息。
   /// 成功返回消息 ID；失败（原因在 [uploads] 的状态里）或被取消返回 null。
-  Future<String?> send(Contact contact, File file) async {
+  Future<String?> sendDirect(Contact contact, File file) =>
+      _send(contact, file, viaDirect: true);
+
+  /// 把 [file] 加密后传到中继，并给 [contact] 发一条文件消息。
+  /// 调用方须已得到用户确认。成功返回消息 ID；失败或被取消返回 null。
+  Future<String?> sendViaRelay(Contact contact, File file) =>
+      _send(contact, file, viaDirect: false);
+
+  Future<String?> _send(Contact contact, File file, {required bool viaDirect}) async {
     final sessionId = contact.sessionId;
     final total = await _lengthOrZero(file);
     final state = FileTransferState._(
@@ -124,16 +133,19 @@ class FileShareService {
       name: p.basename(file.path),
       total: total,
       isUpload: true,
-      isDirect: total > directThreshold,
+      isDirect: viaDirect,
     );
     _uploads[state.id] = state;
     _notify(sessionId);
     try {
-      if (state.total > FileCipher.maxDirectFileBytes) {
+      if (viaDirect && state.total > FileCipher.maxDirectFileBytes) {
         throw const FileTransferException('too-large-direct');
       }
+      if (!viaDirect && state.total > FileCipher.maxFileBytes) {
+        throw const FileTransferException('too-large');
+      }
       final FileOffer offer;
-      if (state.total > directThreshold) {
+      if (viaDirect) {
         if (direct == null) throw const FileTransferException('failed');
         offer = await direct!.send(
           contact: contact,
@@ -280,12 +292,28 @@ class FileShareService {
     for (final sub in _subs) {
       await sub.cancel();
     }
+    await _incomingArrivals.close();
     await _updates.close();
   }
 
   void _onDirectUpdate(String sessionId) {
     _notify(sessionId);
     unawaited(_bindPendingPaths(sessionId));
+    _announceIncoming(sessionId);
+  }
+
+  void _announceIncoming(String sessionId) {
+    final current = {
+      for (final item in incoming(sessionId))
+        if (item.needsAccept) item.id,
+    };
+    final previous = _announcedIncoming.putIfAbsent(sessionId, () => <String>{});
+    for (final id in current) {
+      if (previous.add(id) && !_incomingArrivals.isClosed) {
+        _incomingArrivals.add(sessionId);
+      }
+    }
+    previous.removeWhere((id) => !current.contains(id));
   }
 
   Future<void> _bindPendingPaths(String sessionId) async {

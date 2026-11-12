@@ -320,7 +320,7 @@ void main() {
       final sub = files.updates.listen(events.add);
       addTearDown(sub.cancel);
 
-      final id = await files.send(bobContact, file);
+      final id = await files.sendViaRelay(bobContact, file);
       expect(id, isNotNull);
       expect(files.uploads(_sessionId), isEmpty);
       expect(events, isNotEmpty);
@@ -350,7 +350,7 @@ void main() {
           files.cancel(seen.id);
         }
       };
-      expect(await files.send(bobContact, file), isNull);
+      expect(await files.sendViaRelay(bobContact, file), isNull);
       expect(files.uploads(_sessionId), isEmpty);
       expect(await messaging.messages(bobContact), isEmpty);
       expect(fileRelay.files, isEmpty);
@@ -361,7 +361,7 @@ void main() {
       fileRelay.before = (op, index) async {
         if (op == 'put') throw const FileRelayException(0, 'network');
       };
-      expect(await files.send(bobContact, await source(10)), isNull);
+      expect(await files.sendViaRelay(bobContact, await source(10)), isNull);
       final state = files.uploads(_sessionId).single;
       expect(state.error, 'network');
       expect(await messaging.messages(bobContact), isEmpty);
@@ -369,13 +369,13 @@ void main() {
       files.cancel(state.id);
       expect(files.uploads(_sessionId), isEmpty);
 
-      expect(await files.send(bobContact, File('${dir.path}/missing.bin')), isNull);
+      expect(await files.sendViaRelay(bobContact, File('${dir.path}/missing.bin')), isNull);
       expect(files.uploads(_sessionId).single.error, 'failed');
     });
 
     test('消息发不出去（会话已不在）：删掉刚上传的块', () async {
       await messaging.detach(bobContact);
-      expect(await files.send(bobContact, await source(10)), isNull);
+      expect(await files.sendViaRelay(bobContact, await source(10)), isNull);
       expect(files.uploads(_sessionId).single.error, 'failed');
       expect(fileRelay.files, isEmpty);
       expect(fileRelay.deleted, hasLength(1));
@@ -461,7 +461,7 @@ void main() {
       expect(await files.download(bobContact, message, File('${dir.path}/saved.bin')), isNull);
       expect(files.downloadState(message.id), isNull);
 
-      expect(await files.send(bobContact, await source(3 * _mib, 'up.bin')), isNull);
+      expect(await files.sendViaRelay(bobContact, await source(3 * _mib, 'up.bin')), isNull);
       expect(files.uploads(_sessionId), isEmpty);
       expect(fileRelay.count('put 2'), 0);
     });

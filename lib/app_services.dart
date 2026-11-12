@@ -26,6 +26,7 @@ import 'relay/ws_connector.dart';
 import 'session/rtc_config.dart';
 import 'storage/app_database.dart';
 import 'storage/settings_store.dart';
+import 'ui/ui_focus.dart';
 import 'voice/ice_strategy.dart';
 
 class AppServices {
@@ -52,7 +53,10 @@ class AppServices {
     onContact: _onContact,
   );
 
-  /// 文件：小文件经中继的文件接口中转；大文件经 WebRTC 数据通道直传。
+  /// 当前窗口和打开的会话，供来信提示音使用。
+  final uiFocus = UiFocus();
+
+  /// 文件：双方在线时走 WebRTC 数据通道直传；离线或直连失败且用户确认后走中转。
   late final FileShareService files = FileShareService(
     messaging: messaging,
     transfer: FileRelayTransfer(HttpFileRelay(AppConfig.relayUri)),

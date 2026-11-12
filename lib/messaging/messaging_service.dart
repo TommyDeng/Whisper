@@ -84,10 +84,14 @@ class MessagingService {
       StreamController<({Contact contact, String body})>.broadcast();
   final _signalDroppedController =
       StreamController<({String sessionId, String id})>.broadcast();
+  final _incomingChat = StreamController<({String sessionId, bool isFile})>.broadcast();
   bool _started = false;
 
   /// 某个会话有变化（新消息、状态、连接、对方在线）时发出它的 sessionId。
   Stream<String> get updates => _updates.stream;
+
+  /// 新插入的、来自对方的文本或文件消息（广播）。不含自己发出的、回执或信令。
+  Stream<({String sessionId, bool isFile})> get incomingChat => _incomingChat.stream;
 
   /// 对方发来的通话信令（广播流）：发送方和信令正文（`ChatContent.call` 的 body，未校验）。
   /// 信令不落库、不回回执。
@@ -478,6 +482,7 @@ class MessagingService {
     await _callSignalsController.close();
     await _fileSignalsController.close();
     await _signalDroppedController.close();
+    await _incomingChat.close();
   }
 
   // ---------------------------------------------------------------------------
@@ -618,6 +623,9 @@ class MessagingService {
       createdAt: DateTime.now().millisecondsSinceEpoch,
     );
     if (identical(_sessions[contact.sessionId], session)) _trySend(contact.sessionId, receipt);
+    if (!_incomingChat.isClosed) {
+      _incomingChat.add((sessionId: contact.sessionId, isFile: isFile));
+    }
     _notify(contact.sessionId);
   }
 

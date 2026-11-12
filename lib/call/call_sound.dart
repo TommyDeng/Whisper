@@ -25,10 +25,13 @@ String? callSoundAssetFor(CallPhase phase) {
   }
 }
 
-/// 循环播放一个 asset，或停止。测试可提供假实现。
+/// 循环或单次播放一个 asset，或停止。测试可提供假实现。
 abstract class CallSoundPlayer {
   /// 循环播放 [asset]（相对 `assets/` 的路径）。若已在播同一资源则由调用方避免重复进入。
   Future<void> loop(String asset);
+
+  /// 播放一次 [asset]（相对 `assets/` 的路径）。
+  Future<void> playOnce(String asset);
 
   Future<void> stop();
 
@@ -37,9 +40,12 @@ abstract class CallSoundPlayer {
 
 /// 用 audioplayers 播本地 asset。播放失败时吞掉错误，不影响通话。
 class AudioplayersCallSoundPlayer implements CallSoundPlayer {
-  AudioplayersCallSoundPlayer({AudioPlayer? player}) : _player = player ?? AudioPlayer();
+  AudioplayersCallSoundPlayer({AudioPlayer? player, AudioPlayer? oneshot})
+    : _player = player ?? AudioPlayer(),
+      _oneshot = oneshot ?? AudioPlayer();
 
   final AudioPlayer _player;
+  final AudioPlayer _oneshot;
 
   @override
   Future<void> loop(String asset) async {
@@ -49,6 +55,17 @@ class AudioplayersCallSoundPlayer implements CallSoundPlayer {
       await _player.play(AssetSource(asset));
     } catch (_) {
       // 本机缺解码器或资源时不打断通话
+    }
+  }
+
+  @override
+  Future<void> playOnce(String asset) async {
+    try {
+      await _oneshot.stop();
+      await _oneshot.setReleaseMode(ReleaseMode.release);
+      await _oneshot.play(AssetSource(asset));
+    } catch (_) {
+      // 本机缺解码器或资源时不打断界面
     }
   }
 
@@ -63,6 +80,9 @@ class AudioplayersCallSoundPlayer implements CallSoundPlayer {
   Future<void> dispose() async {
     try {
       await _player.dispose();
+    } catch (_) {}
+    try {
+      await _oneshot.dispose();
     } catch (_) {}
   }
 }

@@ -35,6 +35,7 @@ flutter:
   assets:
     - assets/sounds/incoming_ring.wav
     - assets/sounds/ringback.wav
+    - assets/sounds/message_chime.wav
 
 # sqlite3 用带加密支持的 SQLite3 Multiple Ciphers 构建，本地数据库整库加密
 hooks:
