@@ -7,6 +7,7 @@ import '../contact/contact.dart';
 import '../messaging/message_codec.dart';
 import '../messaging/messaging_service.dart';
 import '../storage/local_db.dart';
+import 'file_relay_api.dart';
 import 'file_relay_transfer.dart';
 
 // 把“传文件”和“发文件消息”串起来，供界面使用。见 docs/file-relay.md 的“本地记录”。
@@ -81,8 +82,10 @@ class FileShareService {
     _uploads[state.id] = state;
     _notify(sessionId);
     try {
+      final auth = _authOf(contact);
       final offer = await transfer.upload(
         file,
+        auth: auth,
         cancel: state._cancel,
         onProgress: (done, _) => _progress(state, done),
       );
@@ -90,7 +93,7 @@ class FileShareService {
       try {
         msgId = await messaging.sendFile(contact, offer);
       } catch (_) {
-        await transfer.discard(offer.fileId); // 消息没发出去，对方永远不会来取
+        await transfer.discard(offer.fileId, auth: auth); // 消息没发出去，对方永远不会来取
         rethrow;
       }
       await LocalDatabase.setFilePath(msgId, file.absolute.path);
@@ -130,6 +133,7 @@ class FileShareService {
       final saved = await transfer.download(
         offer,
         target,
+        auth: _authOf(contact),
         cancel: state._cancel,
         onProgress: (done, _) => _progress(state, done),
       );
@@ -202,6 +206,9 @@ class FileShareService {
   void _notify(String sessionId) {
     if (!_updates.isClosed) _updates.add(sessionId);
   }
+
+  static FileRelayAuth _authOf(Contact contact) =>
+      FileRelayAuth(sessionId: contact.sessionId, peer: contact.peerRole);
 
   static Future<int> _lengthOrZero(File file) async {
     try {

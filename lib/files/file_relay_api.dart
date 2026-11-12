@@ -8,6 +8,22 @@ import 'file_cipher.dart';
 // 中继文件接口（PUT/GET /file/<fileId>/<index>、DELETE /file/<fileId>）的客户端。
 // 接口约定见 docs/file-relay.md。这里不记录路径、文件 ID 或内容。
 
+/// 会话凭据：与连接 `/session/<sessionId>?peer=a|b` 是同一套身份。
+/// [toString] 不含凭据内容。
+class FileRelayAuth {
+  const FileRelayAuth({required this.sessionId, required this.peer});
+
+  final String sessionId;
+
+  /// `a`（邀请人）或 `b`（加入者）。
+  final String peer;
+
+  String get headerValue => 'Whisper $sessionId $peer';
+
+  @override
+  String toString() => 'FileRelayAuth';
+}
+
 /// 中继拒绝了请求（[status] 是 HTTP 状态码，[code] 是响应里的 error），
 /// 或者没连上（[status] 为 0，[code] 为 `network`）。
 class FileRelayException implements Exception {
@@ -27,13 +43,13 @@ class FileRelayException implements Exception {
 
 abstract class FileRelayApi {
   /// 上传一个密文块。这一块已经在中继上时也算成功。
-  Future<void> putChunk(String fileId, int index, Uint8List sealed);
+  Future<void> putChunk(String fileId, int index, Uint8List sealed, FileRelayAuth auth);
 
   /// 下载一个密文块。不存在（过期或已删除）时抛 status 为 404 的 [FileRelayException]。
-  Future<Uint8List> getChunk(String fileId, int index);
+  Future<Uint8List> getChunk(String fileId, int index, FileRelayAuth auth);
 
   /// 删除一个文件的所有块。
-  Future<void> deleteFile(String fileId);
+  Future<void> deleteFile(String fileId, FileRelayAuth auth);
 }
 
 class HttpFileRelay implements FileRelayApi {
@@ -61,8 +77,8 @@ class HttpFileRelay implements FileRelayApi {
   Uri _chunk(String fileId, int index) => _base.resolve('/file/$fileId/$index');
 
   @override
-  Future<void> putChunk(String fileId, int index, Uint8List sealed) =>
-      _request('PUT', _chunk(fileId, index), body: sealed, (response) async {
+  Future<void> putChunk(String fileId, int index, Uint8List sealed, FileRelayAuth auth) =>
+      _request('PUT', _chunk(fileId, index), auth, body: sealed, (response) async {
         final status = response.statusCode;
         final code = await _errorCode(response);
         if (status == 201 || (status == 409 && code == 'chunk-exists')) return;
@@ -70,8 +86,8 @@ class HttpFileRelay implements FileRelayApi {
       });
 
   @override
-  Future<Uint8List> getChunk(String fileId, int index) =>
-      _request('GET', _chunk(fileId, index), (response) async {
+  Future<Uint8List> getChunk(String fileId, int index, FileRelayAuth auth) =>
+      _request('GET', _chunk(fileId, index), auth, (response) async {
         if (response.statusCode != 200) {
           throw FileRelayException(response.statusCode, await _errorCode(response));
         }
@@ -89,8 +105,8 @@ class HttpFileRelay implements FileRelayApi {
       });
 
   @override
-  Future<void> deleteFile(String fileId) =>
-      _request('DELETE', _base.resolve('/file/$fileId'), (response) async {
+  Future<void> deleteFile(String fileId, FileRelayAuth auth) =>
+      _request('DELETE', _base.resolve('/file/$fileId'), auth, (response) async {
         final status = response.statusCode;
         final code = await _errorCode(response);
         if (status != 200) throw FileRelayException(status, code);
@@ -99,12 +115,14 @@ class HttpFileRelay implements FileRelayApi {
   Future<T> _request<T>(
     String method,
     Uri uri,
+    FileRelayAuth auth,
     Future<T> Function(HttpClientResponse response) handle, {
     Uint8List? body,
   }) async {
     final client = _client ??= (HttpClient()..connectionTimeout = timeout);
     try {
       final request = await client.openUrl(method, uri).timeout(timeout);
+      request.headers.set('authorization', auth.headerValue);
       if (body != null) {
         request.headers.contentType = ContentType.binary;
         request.contentLength = body.length;

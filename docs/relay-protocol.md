@@ -152,4 +152,4 @@ alarm 在 `expiresAt` 触发：用 `4002`（`expired`）关闭所有连接，删
 - `GET /file/<fileId>/<index>` 下载一个密文块（不存在或已过 7 天 `404 not-found`）。
 - `DELETE /file/<fileId>` 删除这个文件的全部块。
 
-`fileId` 是 43 个 URL 安全字符，起访问凭据的作用；`index` 为 `0`–`127`。实现在 `worker/src/files.ts`，Worker 不记录请求信息。完整规则、分块与加密方式见 [file-relay.md](file-relay.md)。
+`fileId` 是 43 个 URL 安全字符；`index` 为 `0`–`127`。请求须带会话凭据 `Authorization: Whisper <sessionId> <peer>`，与 `/session/<sessionId>?peer=a|b` 是同一套身份：第一次成功的上传把 `fileId` 绑到该会话，之后只有这个会话的两个 peer 可以上传、下载或删除。未鉴权 `401 unauthorized`，绑到其它会话 `403 forbidden`。每个会话当前占用的密文不超过 1 GiB，每 10 秒最多 60 次文件请求；超额分别是 `413 quota-exceeded` 和 `429 rate-limited`。实现在 `worker/src/files.ts`，记账在对应的 `SessionDO` 里，Worker 不记录请求信息。完整规则、分块与加密方式见 [file-relay.md](file-relay.md)。

@@ -57,7 +57,7 @@ export default {
       );
     }
 
-    const file = handleFileRequest(request, env.FILES, url);
+    const file = handleFileRequest(request, env, url);
     if (file) return file;
 
     const relay = routeRelay(request, env, url);

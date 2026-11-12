@@ -38,7 +38,7 @@
 - 所有响应带 `cache-control: no-store`。错误体统一为 `{"ok":false,"error":"<代码>"}`。
 - 不记录任何请求信息（路径、`fileId`、大小、IP）。
 
-已知的不足（另行处理，不在本文的两个任务里）：上传没有身份校验和配额，任何人都可以往桶里写；部署前需要加限制，并在 R2 上配 7 天生命周期规则兜底。
+鉴权与配额见下文“鉴权与配额（部署前必须）”。部署前还要在 R2 上配 7 天生命周期规则兜底。
 
 ## 任务 1：Worker 的文件接口
 
@@ -232,3 +232,61 @@ class FileReceiver {
 - widget 测试覆盖：阅后即焚时禁用发文件、上传进度与失败与取消、文件气泡的下载/进度/已保存/打开位置、覆盖确认、默认文件名用 `safeName`、各失败原因文案、根据 `updates` 刷新。
 - 测试不访问外网：消息用 `test/relay/fake_relay.dart`，文件用 `test/files/fake_file_relay.dart`；选文件、选保存位置和打开所在位置都用假的实现。
 - `flutter analyze --no-fatal-infos lib test` 没有新增问题（基线 18 条 info），`flutter test` 全过（现有 331 个测试不能少）。本任务不改 `worker/`。
+
+## 鉴权与配额（部署前必须）
+
+文件接口复用会话中继已有的身份：知道 `sessionId` 并且自称 `peer=a|b`，与连接 `/session/<sessionId>?peer=a|b` 是同一套证明，不另建密钥或令牌体系。Worker 不签发新的密钥；也不新增 secret。
+
+凭据放在请求头，避免出现在 URL 里：
+
+```
+Authorization: Whisper <sessionId> <peer>
+```
+
+`sessionId` 必须符合 `RELAY_ID`（22–64 个 URL 安全字符），`peer` 必须是 `a` 或 `b`。其它写法（缺头、前缀不对、格式不合格）一律视为未鉴权。
+
+### 谁能操作哪个 fileId
+
+- 第一次成功的 `PUT` 把该 `fileId` 绑定到凭据里的 `sessionId`（绑定记在 R2 对象 `<fileId>/owner` 上，不是块序号，客户端不能把它当块下载）。
+- 之后这个 `fileId` 的 `PUT` / `GET` / `DELETE`，只有同一个会话的两个 peer（`a` 或 `b`）可以做。对方下载时用自己的 `peer`，但 `sessionId` 相同。
+- 绑定在 `DELETE` 时一起删掉。绑定对象过期（与块相同，上传满 7 天）后按未绑定处理，该 `fileId` 可以重新绑定。
+
+校验顺序：先 `fileId`，再 `index`，再方法，然后鉴权，最后才读请求体、查绑定、执行配额与写入。方法和路径不匹配时仍返回 `405`，即使没有凭据。
+
+| 情况 | 状态与错误码 | 存储 |
+| --- | --- | --- |
+| 路径校验已通过，但缺少凭据或凭据格式不对 | `401 unauthorized` | 不读请求体、不改存储 |
+| 凭据合格，但该 `fileId` 已绑定到另一个会话 | `403 forbidden` | 不改存储 |
+| 本会话尚无此文件（未绑定或不存在）：`GET` | `404 not-found` | 不改存储 |
+| 本会话尚无此文件：`DELETE` | `200`（与“没有块也算成功”一致） | 不删别人的对象 |
+| 超过单块大小 | 仍是 `413 chunk-too-large` | 不得写入 |
+| 超过下面的会话总量 | `413 quota-exceeded` | 不得写入；已有块不动 |
+| 超过下面的请求速率 | `429 rate-limited` | 不改存储 |
+
+`409 chunk-exists` 只在本会话已拥有该块时返回；其它会话看到的是 `403`，不能靠 409 探查块是否存在。
+
+### 配额
+
+按会话（两个 peer 共用同一个池），不按文件、不按 IP：
+
+- **总量**：一个会话当前占用的密文（尚未删除、绑定尚未过期的全部块）不超过 `FILE_SESSION_QUOTA_BYTES` = 1 GiB（1073741824 字节）。不含绑定对象本身。
+- **速率**：一个会话在 `FILE_RATE_LIMIT_WINDOW_MS` = 10 秒内，最多处理 `FILE_RATE_LIMIT_MAX_REQUESTS` = 60 次文件请求（`PUT`/`GET`/`DELETE` 都计数；`401`/`400`/`405` 这类还没进会话记账的请求不计入）。
+
+总量定 1 GiB 的理由：单文件上限已是 100 MiB，1:1 会话在 7 天保留期内允许大约 10 个满额文件同时待下载，够日常使用；R2 免费额度大约 10 GB 存储，按这个上限大约能支撑约 10 个打满的会话，适合当前个人向 MVP，又能挡住“随便 invent 一个 fileId 就把桶写满”。速率窗口与会话 WebSocket 的 10 秒窗口对齐；60 次/10 秒大约允许 6 MiB/s 的满额块，100 MiB 文件大约两个窗口能传完，不把正当上传拖得过慢，但能限制灌请求。
+
+记账在对应的 `SessionDO` 里（按 `sessionId` 取 DO，与会话中继是同一个对象）。Worker 用内部请求询问它，这条内部路径不对外暴露。过期的占用来 `isExpired` 判断，在记账时和会话原有的过期清理里释放。`PUT` 在写入成功后再增加占用；若写入时发现块其实已存在，不重复记账。`DELETE` 成功后释放该 `fileId` 的占用。
+
+### 客户端
+
+- `HttpFileRelay` 的 `putChunk` / `getChunk` / `deleteFile` 必须带上该联系人的 `sessionId` 和 `peerRole`，写成上面的 `Authorization` 头。不记录凭据、路径或 `fileId`。
+- 状态码映射（复用已有失败原因，不新增取值）：
+  - `413 quota-exceeded`、`401 unauthorized`、`403 forbidden`，以及其它非暂时性拒绝：`FileTransferException('rejected')`，不重试。`too-large` 仍只用于客户端本地发现文件超过 100 MiB，以免界面文案（“不能超过 100 MB”）与配额不符。
+  - `429 rate-limited`：按已有规则视为暂时性错误，重试；次数用尽后是 `network`。
+  - `404` 仍是 `not-found`；`5xx` 和连不上仍按暂时性错误重试。
+
+### 完成标准
+
+- Worker 测试覆盖：未鉴权 401、错误会话 403、本会话读写删除成功、DELETE 无名文件仍 200 但不误删他人、超额 413 且不写入、超速 429、配额在 7 天后释放、内部记账接口不能从公网走到。
+- 客户端测试覆盖：请求带上正确的 `Authorization` 头；`401`/`403`/`413 quota-exceeded` 映射为 `rejected`。
+- `worker/` 下 `npm run typecheck`、`npm test` 全过（现有 66 个测试不能少）。`flutter analyze --no-fatal-infos lib test` 没有新增问题（基线 18 条 info），`flutter test` 全过（现有约 343 个测试不能少）。
+- 不部署、不建 R2 桶、不跑会改写 `worker/worker-configuration.d.ts` 的 `wrangler types`（若改写了须还原）。

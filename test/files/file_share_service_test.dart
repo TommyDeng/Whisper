@@ -18,6 +18,7 @@ import '../relay/fake_relay.dart';
 import 'fake_file_relay.dart';
 
 const _sessionId = 'session-0000000000000000000001';
+const _auth = FileRelayAuth(sessionId: _sessionId, peer: 'a');
 const _mib = FileCipher.chunkSize;
 
 Future<void> _until(bool Function() condition, {String what = '条件'}) async {
@@ -118,7 +119,7 @@ void main() {
   /// Bob 把一个文件传到中继，返回他要发的 offer 和原文件。
   Future<({FileOffer offer, File file})> bobUploads(int size, [String name = 'from-bob.bin']) async {
     final file = await source(size, name);
-    final offer = await transfer.upload(file);
+    final offer = await transfer.upload(file, auth: _auth);
     fileRelay.calls.clear();
     return (offer: offer, file: file);
   }
