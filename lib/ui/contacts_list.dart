@@ -20,7 +20,7 @@ import 'app_theme.dart';
 import 'chat_screen.dart';
 
 /// 联系人条目
-class ContactItem extends StatelessWidget {
+class ContactItem extends StatefulWidget {
   final Contact contact;
   final bool online;
   final int unread;
@@ -36,73 +36,128 @@ class ContactItem extends StatelessWidget {
     this.unread = 0,
   });
 
-  String get _subtitle {
-    if (!contact.hasSession) return '旧版联系人，需要重新配对';
-    final key = contact.x25519PublicKeyBase64;
-    final fingerprint = key.length > 8 ? key.substring(0, 8) : key;
-    return online ? '在线 · $fingerprint' : fingerprint;
+  @override
+  State<ContactItem> createState() => _ContactItemState();
+}
+
+class _ContactItemState extends State<ContactItem> {
+  var _hovered = false;
+
+  Contact get _contact => widget.contact;
+
+  String get _fingerprint {
+    final key = _contact.x25519PublicKeyBase64;
+    return key.length > 8 ? key.substring(0, 8) : key;
   }
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        height: 56,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: const BoxDecoration(
-          border: Border(
-            bottom: BorderSide(color: AppTheme.lightGray, width: 1),
-          ),
-        ),
-        child: Row(
-          children: [
-            SecurityIcon(
-              status: contact.isVerified
-                  ? SecurityStatus.verified
-                  : SecurityStatus.unverified,
-              size: 14,
+    const subtitleStyle = TextStyle(
+      color: AppTheme.midGray,
+      fontSize: 12,
+      fontWeight: FontWeight.w400,
+    );
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: InkWell(
+        onTap: widget.onTap,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 16),
+          child: Container(
+            height: 64,
+            padding: const EdgeInsets.only(right: 8),
+            decoration: const BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: AppTheme.lightGray, width: 1),
+              ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    contact.name,
-                    style: const TextStyle(
-                      color: AppTheme.black,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+            child: Row(
+              children: [
+                ContactMark(name: _contact.name, online: widget.online),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              _contact.name,
+                              style: TextStyle(
+                                color: AppTheme.black,
+                                fontSize: 15,
+                                fontWeight: widget.unread > 0
+                                    ? FontWeight.w600
+                                    : FontWeight.w500,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Tooltip(
+                            message: _contact.isVerified ? '已验证安全码' : '还没验证安全码',
+                            child: SecurityIcon(
+                              status: _contact.isVerified
+                                  ? SecurityStatus.verified
+                                  : SecurityStatus.unverified,
+                              size: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      if (!_contact.hasSession)
+                        const Text(
+                          '旧版联系人，需要重新配对',
+                          style: subtitleStyle,
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      else
+                        Text.rich(
+                          TextSpan(
+                            children: [
+                              if (widget.online)
+                                const TextSpan(
+                                  text: '在线',
+                                  style: TextStyle(color: AppTheme.green),
+                                )
+                              else
+                                const TextSpan(text: '离线'),
+                              TextSpan(text: '  $_fingerprint'),
+                            ],
+                          ),
+                          style: subtitleStyle,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _subtitle,
-                    style: const TextStyle(
-                      color: AppTheme.darkGray,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w400,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                ),
+                if (widget.unread > 0) ...[
+                  _UnreadBadge(count: widget.unread),
+                  const SizedBox(width: 4),
                 ],
-              ),
+                // 删除按钮平时收着，鼠标移到这一行才出现；位置一直占着，行内不会跳。
+                Visibility(
+                  visible: _hovered,
+                  maintainSize: true,
+                  maintainAnimation: true,
+                  maintainState: true,
+                  child: IconButton(
+                    tooltip: '删除联系人',
+                    icon: const Icon(
+                      Icons.close,
+                      size: 16,
+                      color: AppTheme.midGray,
+                    ),
+                    onPressed: widget.onDelete,
+                  ),
+                ),
+              ],
             ),
-            if (unread > 0) ...[
-              _UnreadBadge(count: unread),
-              const SizedBox(width: 8),
-            ],
-            InkWell(
-              onTap: onDelete,
-              child: const Padding(
-                padding: EdgeInsets.all(8),
-                child: Icon(Icons.close, size: 16, color: AppTheme.midGray),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -266,17 +321,8 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
     final pendingRequests = _services.pairing.incomingRequests.length;
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          '联系人',
-          style: TextStyle(
-            color: AppTheme.black,
-            fontSize: 18,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        centerTitle: false,
-        elevation: 0,
-        backgroundColor: AppTheme.white,
+        title: const Text('联系人'),
+        shape: const Border(bottom: BorderSide(color: AppTheme.lightGray)),
         actions: [
           IconButton(
             tooltip: '添加联系人 / 我的邀请码',
@@ -322,9 +368,30 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
                     bottom: BorderSide(color: AppTheme.lightGray, width: 1),
                   ),
                 ),
-                child: Text(
-                  '有 $pendingRequests 个配对请求等你处理 ›',
-                  style: const TextStyle(color: AppTheme.black, fontSize: 13),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.person_add_outlined,
+                      size: 16,
+                      color: AppTheme.black,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '有 $pendingRequests 个配对请求等你处理',
+                        style: const TextStyle(
+                          color: AppTheme.black,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    const Icon(
+                      Icons.chevron_right,
+                      size: 18,
+                      color: AppTheme.midGray,
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -345,16 +412,20 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.people_outline, size: 48, color: AppTheme.midGray),
-            SizedBox(height: 12),
+            Icon(Icons.people_outline, size: 40, color: AppTheme.lightGray),
+            SizedBox(height: 16),
             Text(
               '暂无联系人',
-              style: TextStyle(color: AppTheme.darkGray, fontSize: 16),
+              style: TextStyle(
+                color: AppTheme.black,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
             ),
-            SizedBox(height: 8),
+            SizedBox(height: 6),
             Text(
               '点右上角的添加按钮，用邀请码添加亲友',
-              style: TextStyle(color: AppTheme.midGray, fontSize: 12),
+              style: TextStyle(color: AppTheme.midGray, fontSize: 13),
             ),
           ],
         ),
@@ -391,13 +462,17 @@ class _UnreadBadge extends StatelessWidget {
         color: AppTheme.black,
         borderRadius: BorderRadius.circular(10),
       ),
-      alignment: Alignment.center,
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: AppTheme.white,
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
+      // 不用 Container 的 alignment：它会把角标撑满整行的高度。
+      child: Center(
+        widthFactor: 1,
+        heightFactor: 1,
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: AppTheme.white,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
     );
