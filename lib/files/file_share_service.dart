@@ -12,6 +12,7 @@ import 'file_offer.dart';
 import 'file_direct_service.dart';
 import 'file_relay_api.dart';
 import 'file_relay_transfer.dart';
+import 'image_file.dart';
 
 // 把“传文件”和“发文件消息”串起来，供界面使用。见 docs/file-relay.md 的“本地记录”。
 
@@ -58,10 +59,15 @@ class FileShareService {
     required this.messaging,
     required this.transfer,
     this.direct,
+    this.imageDirectory,
+    this.autoImageMaxBytes = kAutoImageMaxBytes,
   }) {
     if (direct != null) {
       _subs.add(direct!.updates.listen(_onDirectUpdate));
       _subs.add(messaging.updates.listen(_bindPendingPaths));
+    }
+    if (imageDirectory != null) {
+      _subs.add(messaging.incomingChat.listen(_autoDownloadImage));
     }
   }
 
@@ -70,6 +76,15 @@ class FileShareService {
 
   /// 点对点直传；双方在线时优先走这里。为 null 时只能在用户确认后走中转。
   final FileDirectService? direct;
+
+  /// 自动接收的图片存在哪里。为 null 时图片和普通文件一样等用户确认。
+  final Future<Directory> Function()? imageDirectory;
+
+  /// 不超过这个大小的图片才自动接收。
+  final int autoImageMaxBytes;
+
+  final _autoAccepted = <String>{}; // 已经自动接受过的来传 id
+  var _imageSeq = 0;
 
   final Map<String, FileTransferState> _uploads = {};
   final Map<String, FileTransferState> _downloads = {}; // 以消息 ID 为键
@@ -297,6 +312,7 @@ class FileShareService {
   }
 
   void _onDirectUpdate(String sessionId) {
+    _autoAcceptImages(sessionId);
     _notify(sessionId);
     unawaited(_bindPendingPaths(sessionId));
     _announceIncoming(sessionId);
@@ -314,6 +330,64 @@ class FileShareService {
       }
     }
     previous.removeWhere((id) => !current.contains(id));
+  }
+
+  bool _isAutoImage(String name, int size) =>
+      imageDirectory != null &&
+      isImageFileName(name) &&
+      size <= autoImageMaxBytes;
+
+  /// 图片目录里一个不会和已有文件重名的位置，只保留原来的扩展名。
+  Future<File> _imageTarget(String name) async {
+    final dir = await imageDirectory!();
+    await dir.create(recursive: true);
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    return File(
+      p.join(dir.path, 'whisper-$stamp-${_imageSeq++}.${imageExtension(name)}'),
+    );
+  }
+
+  /// 直传来的图片不等用户选保存位置，直接收到图片目录里。
+  /// 自动接收失败时来传仍在待接受列表里，用户可以手动接收。
+  void _autoAcceptImages(String sessionId) {
+    for (final item
+        in direct?.incoming(sessionId) ?? const <FileDirectIncoming>[]) {
+      if (!item.needsAccept || !_isAutoImage(item.name, item.total)) continue;
+      if (!_autoAccepted.add(item.id)) continue;
+      unawaited(() async {
+        try {
+          await acceptIncoming(item.id, await _imageTarget(item.name));
+        } catch (_) {}
+      }());
+    }
+  }
+
+  /// 经中转发来的图片消息：收到就下载到图片目录。
+  Future<void> _autoDownloadImage(
+    ({String sessionId, String msgId, bool isFile}) event,
+  ) async {
+    if (!event.isFile) return;
+    try {
+      Contact? contact;
+      for (final item in await ContactStore.getAllContacts()) {
+        if (item.sessionId == event.sessionId) {
+          contact = item;
+          break;
+        }
+      }
+      if (contact == null) return;
+      for (final message in await messaging.messages(contact)) {
+        if (message.id != event.msgId) continue;
+        final offer = message.file;
+        if (offer == null || offer.isDirect || message.isSent) return;
+        if (!_isAutoImage(offer.safeName, offer.size)) return;
+        if (_downloads.containsKey(message.id)) return;
+        await download(contact, message, await _imageTarget(offer.safeName));
+        return;
+      }
+    } catch (_) {
+      // 自动下载失败时气泡里仍有「下载」按钮
+    }
   }
 
   Future<void> _bindPendingPaths(String sessionId) async {

@@ -183,6 +183,55 @@ void main() {
       expect(declined, isTrue);
     });
 
+    testWidgets('已在本机的图片只显示图片，不带文件名和「已保存」', (tester) async {
+      await tester.pumpWidget(
+        _wrap(
+          const FileMessageBody(
+            name: 'whisper-paste-1.png',
+            size: 2048,
+            isSent: false,
+            localPath: '/tmp/whisper-paste-1.png',
+          ),
+        ),
+      );
+      expect(find.byType(Image), findsOneWidget);
+      expect(find.text('whisper-paste-1.png'), findsNothing);
+      expect(find.text('已保存'), findsNothing);
+      expect(find.byIcon(Icons.insert_drive_file_outlined), findsNothing);
+    });
+
+    testWidgets('还没收到本机的图片仍按文件显示', (tester) async {
+      await tester.pumpWidget(
+        _wrap(
+          FileMessageBody(
+            name: 'photo.png',
+            size: 2048,
+            isSent: false,
+            onDownload: () {},
+          ),
+        ),
+      );
+      expect(find.byType(Image), findsNothing);
+      expect(find.text('photo.png'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, '下载'), findsOneWidget);
+    });
+
+    testWidgets('本机文件已不在的图片不显示图片', (tester) async {
+      await tester.pumpWidget(
+        _wrap(
+          const FileMessageBody(
+            name: 'photo.png',
+            size: 2048,
+            isSent: true,
+            localPath: '/tmp/gone.png',
+            localMissing: true,
+          ),
+        ),
+      );
+      expect(find.byType(Image), findsNothing);
+      expect(find.text('photo.png'), findsOneWidget);
+    });
+
     testWidgets('直传文件气泡不出现中转下载提示', (tester) async {
       await tester.pumpWidget(
         _wrap(
@@ -204,14 +253,14 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           FileMessageBody(
-            name: '照片.jpg',
+            name: '报告.pdf',
             size: 2048,
             isSent: false,
             onDownload: () {},
           ),
         ),
       );
-      expect(find.text('照片.jpg'), findsOneWidget);
+      expect(find.text('报告.pdf'), findsOneWidget);
       expect(find.text('2.0 KB'), findsOneWidget);
       expect(find.text(kOneTimeDownloadNotice), findsOneWidget);
       expect(find.text('下载'), findsOneWidget);
@@ -219,10 +268,10 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           FileMessageBody(
-            name: '照片.jpg',
+            name: '报告.pdf',
             size: 2048,
             isSent: false,
-            localPath: '/tmp/照片.jpg',
+            localPath: '/tmp/报告.pdf',
             onReveal: () {},
           ),
         ),
@@ -234,10 +283,10 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           FileMessageBody(
-            name: '照片.jpg',
+            name: '报告.pdf',
             size: 2048,
             isSent: false,
-            localPath: '/tmp/照片.jpg',
+            localPath: '/tmp/报告.pdf',
             localMissing: true,
           ),
         ),
@@ -248,10 +297,10 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           FileMessageBody(
-            name: '照片.jpg',
+            name: '报告.pdf',
             size: 2048,
             isSent: true,
-            localPath: '/tmp/照片.jpg',
+            localPath: '/tmp/报告.pdf',
             localMissing: true,
           ),
         ),
@@ -262,7 +311,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             FileMessageBody(
-              name: '照片.jpg',
+              name: '报告.pdf',
               size: 2048,
               isSent: false,
               downloadError: code,
@@ -280,7 +329,7 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           FileMessageBody(
-            name: '照片.jpg',
+            name: '报告.pdf',
             size: 3 * 1024 * 1024,
             isSent: false,
             downloadDone: 1024 * 1024,

@@ -132,8 +132,9 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
         if (mounted) setState(() {});
       }),
       _services.pairing.notices.listen((notice) {
-        if (notice.kind == PairingNoticeKind.contactAdded)
+        if (notice.kind == PairingNoticeKind.contactAdded) {
           unawaited(_loadContacts());
+        }
       }),
       _services.files.updates.listen((_) => unawaited(_loadContacts())),
     ]);

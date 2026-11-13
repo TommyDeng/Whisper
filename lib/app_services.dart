@@ -21,6 +21,7 @@ import 'files/file_direct_transport.dart';
 import 'files/file_relay_api.dart';
 import 'files/file_relay_transfer.dart';
 import 'files/file_share_service.dart';
+import 'files/image_store.dart';
 import 'identity/identity_store.dart';
 import 'messaging/messaging_service.dart';
 import 'pairing/pairing_manager.dart';
@@ -62,9 +63,13 @@ class AppServices {
   late final AppWindow window = AppWindow(uiFocus);
 
   /// 文件：双方在线时走 WebRTC 数据通道直传；离线或直连失败且用户确认后走中转。
+  /// 粘贴发出和自动接收的聊天图片放在这里。
+  final chatImages = ChatImageStore();
+
   late final FileShareService files = FileShareService(
     messaging: messaging,
     transfer: FileRelayTransfer(HttpFileRelay(AppConfig.relayUri)),
+    imageDirectory: chatImages.directory,
     direct: FileDirectService(
       transport: MessagingFileDirectTransport(messaging),
       createLink: () => WebRtcFileLink(),
@@ -157,6 +162,7 @@ class AppServices {
 
   /// 本地保留策略：超过 7 天的消息删除；上次没来得及清的已读焚毁消息删除。
   Future<void> _applyRetention() async {
+    unawaited(chatImages.prune().catchError((Object _) {}));
     try {
       await messaging.purgeExpired();
       await messaging.purgeBurned();
@@ -196,6 +202,7 @@ class AppServices {
     await pairing.reset();
     files.reset();
     await messaging.reset();
+    await chatImages.clear();
     await AppDatabase.destroy();
     await identityManager.reset();
     _starting = null;

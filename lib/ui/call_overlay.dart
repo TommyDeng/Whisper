@@ -33,7 +33,7 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
   StreamSubscription<RTCVideoRenderer?>? _renderers;
   StreamSubscription<RTCVideoRenderer?>? _localRenderers;
   StreamSubscription<CallAudioStats>? _audioStatsSub;
-  StreamSubscription<({String sessionId, bool isFile})>? _incomingChat;
+  StreamSubscription<({String sessionId, String msgId, bool isFile})>? _incomingChat;
   StreamSubscription<String>? _incomingFiles;
   final _sounds = CallSound();
   final _messageSound = MessageSound();
@@ -141,8 +141,9 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
       final callId = snapshot.callId;
       _autoDismiss = Timer(const Duration(seconds: 3), () {
         final current = _services.calls.snapshot;
-        if (current.phase == CallPhase.ended && current.callId == callId)
+        if (current.phase == CallPhase.ended && current.callId == callId) {
           _services.calls.dismiss();
+        }
       });
     }
   }

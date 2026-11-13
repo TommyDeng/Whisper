@@ -333,26 +333,31 @@ class FileMessageBody extends StatelessWidget {
 
     final showImage = saved && isImageFileName(name) && localPath != null;
 
+    // 已经在本机的图片只显示图片本身，不再带文件名、大小和「已保存」。
+    if (showImage) {
+      return GestureDetector(
+        onTap: () => showChatImagePreview(context, localPath!),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 280, maxHeight: 320),
+            child: Image.file(
+              File(localPath!),
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stack) => Text(
+                '无法显示图片：$name',
+                style: TextStyle(color: fg, fontSize: 14),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (showImage) ...[
-          GestureDetector(
-            onTap: () => showChatImagePreview(context, localPath!),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: Image.file(
-                File(localPath!),
-                height: 160,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stack) =>
-                    const SizedBox.shrink(),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [

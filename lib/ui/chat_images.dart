@@ -5,13 +5,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
-/// 根据文件名（或路径）判断是否是常见图片。只看扩展名，不读文件内容。
-bool isImageFileName(String name) {
-  final dot = name.lastIndexOf('.');
-  if (dot < 0 || dot == name.length - 1) return false;
-  final ext = name.substring(dot + 1).toLowerCase();
-  return const {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}.contains(ext);
-}
+export '../files/image_file.dart' show isImageFileName;
 
 /// 把剪贴板图片存成临时文件时用的扩展名；不认识的按 png。
 String clipboardImageExtension(String format) {

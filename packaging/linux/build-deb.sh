@@ -35,16 +35,11 @@ exec /opt/whisper/whisper "$@"
 WRAP
 chmod +x "$STAGING/usr/bin/whisper"
 
-cat > "$STAGING/usr/share/applications/whisper.desktop" << 'DESKTOP'
-[Desktop Entry]
-Name=耳语 Whisper
-Comment=端到端加密聊天与语音客户端
-Exec=whisper
-Icon=whisper
-Terminal=false
-Type=Application
-Categories=Network;InstantMessaging;
-DESKTOP
+cp "$ROOT/packaging/linux/whisper.desktop" \
+  "$STAGING/usr/share/applications/whisper.desktop"
+# GApplication 按 application-id 找同名 desktop 文件，Dock 右键动作才挂得上。
+cp "$ROOT/packaging/linux/whisper.desktop" \
+  "$STAGING/usr/share/applications/org.tommydeng.whisper.desktop"
 
 cp "$ROOT/packaging/linux/icons/whisper.png" \
   "$STAGING/usr/share/icons/hicolor/256x256/apps/whisper.png"

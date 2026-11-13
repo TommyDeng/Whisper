@@ -170,9 +170,8 @@ class WebRtcCallMedia implements CallMedia {
 
   Future<RTCPeerConnection> _open() async {
     if (_closed) throw StateError('已关闭');
-    try {
-      await Helper.ensureAudioSession();
-    } catch (_) {}
+    // 不要调用 Helper.ensureAudioSession()：它只有 iOS 实现，桌面端的原生层收到
+    // 没有参数的未知方法会抛 std::bad_variant_access，整个进程直接退出。
     final constraints = await _audioConstraints();
     final local = await navigator.mediaDevices.getUserMedia({
       'audio': constraints,
@@ -318,9 +317,6 @@ class WebRtcCallMedia implements CallMedia {
   }
 
   Future<void> _attachRemoteTrack(RTCTrackEvent event) async {
-    try {
-      await Helper.ensureAudioSession();
-    } catch (_) {}
     await _selectDefaultPlayout();
     if (_closed || !_remoteRendererReady) return;
     try {
@@ -440,8 +436,9 @@ IcePathType classifyPath({
   if (localType == 'relay' || remoteType == 'relay') return IcePathType.relay;
   if (zeroTierAddresses.contains(localAddress)) return IcePathType.zerotier;
   if (localType == 'host' && remoteType == 'host') return IcePathType.lan;
-  if (const {'host', 'srflx', 'prflx'}.contains(localType))
+  if (const {'host', 'srflx', 'prflx'}.contains(localType)) {
     return IcePathType.srflx;
+  }
   return IcePathType.unknown;
 }
 

@@ -50,16 +50,10 @@ cp "$ROOT/packaging/linux/icons/whisper.png" "$APPDIR/whisper.png"
 cp "$ROOT/packaging/linux/icons/whisper.png" \
   "$APPDIR/usr/share/icons/hicolor/256x256/apps/whisper.png"
 
-cat > "$APPDIR/usr/share/applications/whisper.desktop" << 'DESKTOP'
-[Desktop Entry]
-Name=耳语 Whisper
-Comment=端到端加密聊天与语音客户端
-Exec=whisper
-Icon=whisper
-Terminal=false
-Type=Application
-Categories=Network;InstantMessaging;
-DESKTOP
+cp "$ROOT/packaging/linux/whisper.desktop" \
+  "$APPDIR/usr/share/applications/whisper.desktop"
+cp "$ROOT/packaging/linux/whisper.desktop" \
+  "$APPDIR/usr/share/applications/org.tommydeng.whisper.desktop"
 cp "$APPDIR/usr/share/applications/whisper.desktop" "$APPDIR/whisper.desktop"
 
 cat > "$APPDIR/AppRun" << 'APPRUN'
