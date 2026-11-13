@@ -37,6 +37,7 @@ void main() {
   late FileShareService aliceFiles;
   late FileShareService bobFiles;
   late Directory dir;
+  late Directory images;
   late PipeHub hub;
   late FakeLinkPair links;
 
@@ -115,9 +116,11 @@ void main() {
         progressTimeout: const Duration(seconds: 2),
       ),
     );
+    images = await Directory.systemTemp.createTemp('whisper-share-images-');
     bobFiles = FileShareService(
       messaging: bobMessaging,
       transfer: FileRelayTransfer(fileRelay),
+      imageDirectory: () async => images,
       direct: FileDirectService(
         transport: hub.bob,
         createLink: () => links.bob,
@@ -136,6 +139,7 @@ void main() {
     await bobMessaging.dispose();
     await AppDatabase.close();
     if (await dir.exists()) await dir.delete(recursive: true);
+    if (await images.exists()) await images.delete(recursive: true);
   });
 
   Future<File> source(String name, int size) async {
@@ -187,6 +191,75 @@ void main() {
     expect(aliceFiles.uploads(bobContact.sessionId), isEmpty);
     final paths = await aliceFiles.localPaths(bobContact.sessionId);
     expect(paths[msgId!], file.absolute.path);
+  });
+
+  // Alice 和 Bob 在测试里共用一个数据库，本地路径表分不出是谁写的，
+  // 所以这里直接看 Bob 的图片目录。
+  Future<List<File>> savedImages(int count) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 8));
+    while (true) {
+      final files = images.listSync().whereType<File>().toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
+      if (files.length >= count &&
+          bobFiles.incoming(aliceContact.sessionId).isEmpty) {
+        return files;
+      }
+      if (DateTime.now().isAfter(deadline)) fail('等待超时：图片自动保存');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  test('直传来的图片不用确认，自动存到图片目录', () async {
+    final file = await source('photo.png', 2048);
+    final msgId = await aliceFiles.sendDirect(bobContact, file);
+    expect(msgId, isNotNull);
+    final saved = (await savedImages(1)).single;
+    expect(saved.path.endsWith('.png'), isTrue);
+    expect(await saved.readAsBytes(), await file.readAsBytes());
+  });
+
+  test('超过自动接收上限的图片仍然等用户确认', () async {
+    await bobFiles.dispose();
+    bobFiles = FileShareService(
+      messaging: bobMessaging,
+      transfer: FileRelayTransfer(fileRelay),
+      imageDirectory: () async => images,
+      autoImageMaxBytes: 100,
+      direct: FileDirectService(
+        transport: hub.bob,
+        createLink: () => links.bob,
+        offerTimeout: const Duration(seconds: 2),
+        connectTimeout: const Duration(seconds: 2),
+        progressTimeout: const Duration(seconds: 2),
+      ),
+    );
+    final file = await source('huge.png', 101);
+    final sending = aliceFiles.sendDirect(bobContact, file);
+    await _until(
+      () => bobFiles.incoming(aliceContact.sessionId).isNotEmpty,
+      what: '来传',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final incoming = bobFiles.incoming(aliceContact.sessionId).single;
+    expect(incoming.needsAccept, isTrue);
+    expect(images.listSync(), isEmpty);
+    bobFiles.declineIncoming(incoming.id);
+    await sending;
+  });
+
+  test('普通文件直传仍然等用户确认', () async {
+    final file = await source('notes.txt', 300);
+    final sending = aliceFiles.sendDirect(bobContact, file);
+    await _until(
+      () => bobFiles.incoming(aliceContact.sessionId).isNotEmpty,
+      what: '来传',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final incoming = bobFiles.incoming(aliceContact.sessionId).single;
+    expect(incoming.needsAccept, isTrue);
+    expect(images.listSync(), isEmpty);
+    bobFiles.declineIncoming(incoming.id);
+    await sending;
   });
 
   test('没有直传服务时 sendDirect 失败；确认后可改走中转', () async {

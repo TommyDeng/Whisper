@@ -1,5 +1,10 @@
-/// 任务栏闪烁：窗口隐藏或失去焦点时，用原生通道提醒用户有新消息。
+/// 新消息提醒：窗口隐藏或失去焦点时，闪任务栏按钮，并让托盘图标闪烁。
+///
+/// 只闪任务栏按钮不够：关到托盘后窗口是隐藏的，没有按钮可闪；
+/// Wayland 下 GTK 的紧急提示也不起作用。托盘图标在这两种情况下都还在。
 library;
+
+import 'dart:async';
 
 import 'package:flutter/services.dart';
 
@@ -29,4 +34,51 @@ Future<void> flashTaskbarIfNeeded(UiFocus focus) async {
   } on MissingPluginException {
     // 测试或尚未注册通道时不必闪。
   } catch (_) {}
+}
+
+/// 让托盘图标在普通图标和带红点的提醒图标之间交替，直到 [stop]。
+class TrayBlinker {
+  TrayBlinker({
+    required this.setIcon,
+    required this.normalIcon,
+    required this.alertIcon,
+  });
+
+  /// 两次换图标之间的间隔。
+  static const interval = Duration(milliseconds: 600);
+
+  final Future<void> Function(String icon) setIcon;
+  final String normalIcon;
+  final String alertIcon;
+
+  Timer? _timer;
+  var _alertShown = false;
+
+  bool get active => _timer != null;
+
+  /// 开始闪烁；已经在闪就什么也不做。
+  void start() {
+    if (_timer != null) return;
+    _show(true);
+    _timer = Timer.periodic(interval, (_) => _show(!_alertShown));
+  }
+
+  /// 停止闪烁并恢复普通图标。
+  void stop() {
+    final timer = _timer;
+    if (timer == null) return;
+    timer.cancel();
+    _timer = null;
+    _show(false);
+  }
+
+  void _show(bool alert) {
+    _alertShown = alert;
+    // 托盘不可用时换图标会失败，不能让它变成未处理的异步错误。
+    unawaited(
+      Future<void>.sync(
+        () => setIcon(alert ? alertIcon : normalIcon),
+      ).catchError((Object _) {}),
+    );
+  }
 }

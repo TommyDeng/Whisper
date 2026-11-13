@@ -382,6 +382,67 @@ void main() {
     });
   });
 
+  group('图片自动下载', () {
+    late Directory images;
+
+    setUp(() async {
+      images = await Directory.systemTemp.createTemp('whisper_file_images_');
+      await files.dispose();
+      files = FileShareService(
+        messaging: messaging,
+        transfer: transfer,
+        imageDirectory: () async => images,
+        autoImageMaxBytes: 1000,
+      );
+    });
+
+    tearDown(() => images.delete(recursive: true));
+
+    Future<String> receive(int size, String name) async {
+      final up = await bobUploads(size, name);
+      await fromBob('in-file', ChatContent.file(up.offer.encode(), sentAt: 1));
+      return (await messaging.messages(bobContact)).single.id;
+    }
+
+    Future<String?> boundPath(String msgId) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (DateTime.now().isBefore(deadline)) {
+        final path = (await files.localPaths(_sessionId))[msgId];
+        if (path != null) return path;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      return null;
+    }
+
+    test('收到的图片自动下载到图片目录并绑定到消息', () async {
+      final id = await receive(700, 'photo.JPG');
+      final path = await boundPath(id);
+      expect(path, isNotNull);
+      final saved = File(path!);
+      expect(saved.parent.path, images.absolute.path);
+      expect(saved.path.endsWith('.jpg'), isTrue);
+      expect(
+        await saved.readAsBytes(),
+        await File('${dir.path}/photo.JPG').readAsBytes(),
+      );
+      expect(files.downloadState(id), isNull);
+    });
+
+    test('普通文件不自动下载', () async {
+      final id = await receive(700, 'report.pdf');
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect((await files.localPaths(_sessionId))[id], isNull);
+      expect(images.listSync(), isEmpty);
+    });
+
+    test('超过上限的图片不自动下载', () async {
+      final id = await receive(1001, 'big.png');
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      expect((await files.localPaths(_sessionId))[id], isNull);
+      expect(images.listSync(), isEmpty);
+    });
+  });
+
   group('下载', () {
     test('下载到目标位置并记下路径', () async {
       final message = await receivedFile(2 * _mib + 7);

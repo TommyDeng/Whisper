@@ -314,7 +314,10 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _pasteIntoChat() async {
     if (!_burn) {
       try {
-        final file = await saveClipboardImage();
+        // 存到应用自己的图片目录：放系统临时目录的话重启后气泡里的图就没了。
+        final file = await saveClipboardImage(
+          directory: await AppServices.instance.chatImages.directory(),
+        );
         if (file != null) {
           await _sendFileFromPath(file.path);
           return;

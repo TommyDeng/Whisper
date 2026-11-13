@@ -19,6 +19,20 @@ class AppWindow with WindowListener, TrayListener {
   var _ready = false;
   var _quitting = false;
 
+  static String get _normalIcon => Platform.isWindows
+      ? 'assets/icons/app_icon.ico'
+      : 'assets/icons/whisper.png';
+  static String get _alertIcon => Platform.isWindows
+      ? 'assets/icons/app_icon_unread.ico'
+      : 'assets/icons/whisper_unread.png';
+
+  /// 有未看的新消息时让托盘图标闪烁。
+  late final _blinker = TrayBlinker(
+    setIcon: trayManager.setIcon,
+    normalIcon: _normalIcon,
+    alertIcon: _alertIcon,
+  );
+
   /// 初始化窗口拦截和托盘。只在 Linux / Windows 上有效。
   Future<void> init() async {
     if (_ready) return;
@@ -38,11 +52,8 @@ class AppWindow with WindowListener, TrayListener {
   /// Linux 的 tray_manager 没有实现 `setToolTip`；1.0.3 在 setIcon 之后调用它
   /// 会抛错，导致 [setContextMenu] 根本没跑，托盘图标在、菜单却是空的。
   Future<void> _initTray() async {
-    final icon = Platform.isWindows
-        ? 'assets/icons/app_icon.ico'
-        : 'assets/icons/whisper.png';
     try {
-      await trayManager.setIcon(icon);
+      await trayManager.setIcon(_normalIcon);
     } catch (_) {}
     try {
       await trayManager.setToolTip('耳语');
@@ -70,6 +81,7 @@ class AppWindow with WindowListener, TrayListener {
 
   /// 把主窗口请到前台（第二次启动或托盘「显示」）。
   Future<void> showMainWindow() async {
+    _blinker.stop();
     await windowManager.show();
     await windowManager.focus();
     focus.windowHidden = false;
@@ -80,6 +92,7 @@ class AppWindow with WindowListener, TrayListener {
   Future<void> quit() async {
     if (_quitting) return;
     _quitting = true;
+    _blinker.stop();
     try {
       await windowManager.setPreventClose(false);
     } catch (_) {}
@@ -91,9 +104,18 @@ class AppWindow with WindowListener, TrayListener {
     } catch (_) {}
   }
 
-  /// 根据窗口是否可见、是否在前台，决定要不要闪任务栏。
+  /// 根据窗口是否可见、是否在前台，决定要不要闪任务栏和托盘图标。
+  ///
+  /// 托盘图标一直闪到窗口重新回到前台（[onWindowFocus] / [showMainWindow]）。
   Future<void> flashIfNeeded() async {
     await refreshFocus();
+    if (_ready &&
+        shouldFlashTaskbar(
+          windowFocused: focus.windowFocused,
+          windowHidden: focus.windowHidden,
+        )) {
+      _blinker.start();
+    }
     await flashTaskbarIfNeeded(focus);
   }
 
@@ -122,6 +144,7 @@ class AppWindow with WindowListener, TrayListener {
 
   @override
   void onWindowFocus() {
+    _blinker.stop();
     focus.windowFocused = true;
     focus.windowHidden = false;
   }
