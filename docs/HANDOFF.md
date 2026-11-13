@@ -1,4 +1,4 @@
-# 交接说明（2026-11-13，1.0.4）
+# 交接说明（2026-11-13，1.0.5）
 
 给接手的 Agent。先读根目录的 `CLAUDE.md`（工作方式和检查命令），再读这份。
 
@@ -31,7 +31,7 @@
 
 音频调查（本机 Ubuntu，2026-11-12 21:55 亚洲/上海）：PipeWire 默认麦克风用 `pw-record` 两秒峰值 648、有效值 154.7，硬件采集正常。独立的 flutter_webrtc 1.6.3 进程内双 `RTCPeerConnection` 环回（不接渲染器、远端 track 关闭以免外放）结果是 `linux-capture=NONZERO`：4 秒内 `bytesSent` 从 928 增到 7263（增量 6335），本端 `audioLevel` 约 0.009–0.011，`totalAudioEnergy` 持续上升。因此 Ubuntu 侧 getUserMedia / 发送在本机是通的，1.0.2 的“Linux 采集没起来”假设不成立。更可能仍是 Windows 远端播放：`SetPlayoutDevice` 默认不会在 getUserMedia 里调用（#2006/#2001），`enumerateDevices` 有时是空的（#2141），`onTrack.streams` 在 Unified Plan 下可能为空。1.0.3 仍补了显式 `sourceId`/`deviceId`、`selectAudioInput` + `selectAudioOutput`（失败时再试 `'default'`）、`ensureAudioSession`、隐藏的本端+远端渲染器、streams 为空时自行建流挂轨，以及通话条上的收发诊断（本端↑字节/电平，远端↓字节/电平）。下次对打时请看这一行：若 Ubuntu 的「本端↑」字节几乎不动，问题在 Ubuntu 发送；若 Ubuntu「本端↑」在涨而 Windows「远端↓」不动或电平一直是 0，问题在 Windows 接收/播放。
 
-分支 `feat/pairing-dialog-autostart`（2026-11-13，未发版、未在真机上验证）：
+1.0.5（`1.0.5+7`，2026-11-13，PR #41，未在真机上验证）：
 
 - Ubuntu→Windows 单向无声：用户确认通话条两边字节都在涨、Windows 有多个输出设备。原因是 Windows 上设备名里没有 default，枚举顺序也和默认设备无关，`pickDefaultPlayoutDeviceId` 退到“第一个输出设备”，声音被送到别的设备。现在 Windows runner 通过 `whisper/desktop` 通道的 `defaultAudioDevices` 报告系统默认播放/录音端点 ID，Dart 按 ID 匹配；匹配不到时不指定设备（不再取第一个）。通话条那行诊断的悬停提示里会显示实际播放设备。Windows 原生代码本机编不了，要靠 CI 和两台电脑对打确认。
 - 托盘图标不闪：最小工程实测（本机 GNOME Wayland）窗口隐藏后定时器照常跑、每拍都发出 `NewIcon`，所以 1.0.4 其实在换图，只是“普通图标 ↔ 带红点图标”差别太小。改成“带红点图标 ↔ 空白图标”，回到前台恢复普通图标。屏幕上的实际效果没看到（Wayland 不让截图）。
