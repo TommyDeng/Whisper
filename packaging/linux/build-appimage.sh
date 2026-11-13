@@ -51,10 +51,8 @@ cp "$ROOT/packaging/linux/icons/whisper.png" \
   "$APPDIR/usr/share/icons/hicolor/256x256/apps/whisper.png"
 
 cp "$ROOT/packaging/linux/whisper.desktop" \
-  "$APPDIR/usr/share/applications/whisper.desktop"
-cp "$ROOT/packaging/linux/whisper.desktop" \
   "$APPDIR/usr/share/applications/org.tommydeng.whisper.desktop"
-cp "$APPDIR/usr/share/applications/whisper.desktop" "$APPDIR/whisper.desktop"
+cp "$ROOT/packaging/linux/whisper.desktop" "$APPDIR/whisper.desktop"
 
 cat > "$APPDIR/AppRun" << 'APPRUN'
 #!/bin/bash

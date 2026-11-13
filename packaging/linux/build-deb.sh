@@ -35,9 +35,9 @@ exec /opt/whisper/whisper "$@"
 WRAP
 chmod +x "$STAGING/usr/bin/whisper"
 
-cp "$ROOT/packaging/linux/whisper.desktop" \
-  "$STAGING/usr/share/applications/whisper.desktop"
-# GApplication 按 application-id 找同名 desktop 文件，Dock 右键动作才挂得上。
+# 只装一个启动器，文件名必须等于 application-id（linux/CMakeLists.txt 的
+# APPLICATION_ID）：桌面环境靠它把窗口和 Dock 右键动作对上。装两个同名启动器
+# 会在应用列表里出现两个图标；旧包留下的 whisper.desktop 升级时由 dpkg 删除。
 cp "$ROOT/packaging/linux/whisper.desktop" \
   "$STAGING/usr/share/applications/org.tommydeng.whisper.desktop"
 
