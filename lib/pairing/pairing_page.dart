@@ -1,4 +1,4 @@
-/// 配对页面：自己的邀请码（二维码 + 文本）、输入对方的邀请码、处理收到的配对请求。
+/// 配对对话框：自己的邀请码（二维码 + 文本）、输入对方的邀请码、处理收到的配对请求。
 library;
 
 import 'dart:async';
@@ -14,6 +14,17 @@ import 'invitation_code.dart';
 import 'pairing_flow.dart';
 import 'pairing_manager.dart';
 
+/// 弹出「添加联系人」对话框，用法和「关于」一样：点关闭或点对话框外面收起。
+Future<void> showPairingDialog(
+  BuildContext context, {
+  PairingManager? manager,
+}) {
+  return showDialog<void>(
+    context: context,
+    builder: (context) => PairingPage(manager: manager),
+  );
+}
+
 class PairingPage extends StatefulWidget {
   const PairingPage({super.key, this.manager});
 
@@ -25,7 +36,8 @@ class PairingPage extends StatefulWidget {
 }
 
 class _PairingPageState extends State<PairingPage> {
-  late final PairingManager _manager = widget.manager ?? AppServices.instance.pairing;
+  late final PairingManager _manager =
+      widget.manager ?? AppServices.instance.pairing;
   final _codeController = TextEditingController();
   final _nameController = TextEditingController();
   final List<StreamSubscription<void>> _subscriptions = [];
@@ -38,15 +50,20 @@ class _PairingPageState extends State<PairingPage> {
   @override
   void initState() {
     super.initState();
-    _subscriptions.add(_manager.changes.listen((_) {
-      if (!mounted) return;
-      // 手上的邀请被用掉或过期后，换一个新的
-      if (_invitation != null && _manager.openInvitation?.inviteId != _invitation!.inviteId) {
-        final stillPending = _manager.incomingRequests.any((r) => r.inviteId == _invitation!.inviteId);
-        if (!stillPending) unawaited(_loadInvitation());
-      }
-      setState(() {});
-    }));
+    _subscriptions.add(
+      _manager.changes.listen((_) {
+        if (!mounted) return;
+        // 手上的邀请被用掉或过期后，换一个新的
+        if (_invitation != null &&
+            _manager.openInvitation?.inviteId != _invitation!.inviteId) {
+          final stillPending = _manager.incomingRequests.any(
+            (r) => r.inviteId == _invitation!.inviteId,
+          );
+          if (!stillPending) unawaited(_loadInvitation());
+        }
+        setState(() {});
+      }),
+    );
     _subscriptions.add(_manager.notices.listen(_onNotice));
     unawaited(_loadName());
     unawaited(_loadInvitation());
@@ -73,7 +90,10 @@ class _PairingPageState extends State<PairingPage> {
 
   Future<void> _saveName() async {
     try {
-      await SettingsStore.set(SettingsStore.displayName, _nameController.text.trim());
+      await SettingsStore.set(
+        SettingsStore.displayName,
+        _nameController.text.trim(),
+      );
     } catch (_) {
       _toast('名字没能保存');
     }
@@ -111,7 +131,8 @@ class _PairingPageState extends State<PairingPage> {
     if (!mounted) return;
     setState(() {
       _joining = false;
-      _joinError = unexpected ??
+      _joinError =
+          unexpected ??
           switch (error) {
             null => null,
             JoinError.invalidCode => '邀请码格式不对，请检查是否抄全。',
@@ -131,7 +152,9 @@ class _PairingPageState extends State<PairingPage> {
         _toast('对方拒绝了配对请求');
       case PairingNoticeKind.failed:
         if (notice.failure == PairingFailure.cancelled) return;
-        _toast(describePairingFailure(notice.failure, asInviter: notice.asInviter));
+        _toast(
+          describePairingFailure(notice.failure, asInviter: notice.asInviter),
+        );
     }
   }
 
@@ -142,84 +165,118 @@ class _PairingPageState extends State<PairingPage> {
 
   @override
   Widget build(BuildContext context) {
-    final requests = _manager.incomingRequests;
-    final joins = _manager.joins;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('添加联系人'),
-        backgroundColor: AppTheme.white,
-        elevation: 0,
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          for (final request in requests) _buildRequest(request),
-          _section('我的名字'),
-          TextField(
-            controller: _nameController,
-            maxLength: 64,
-            decoration: const InputDecoration(
-              hintText: '配对时显示给对方（可留空）',
-              border: OutlineInputBorder(),
-              counterText: '',
-              isDense: true,
-            ),
-            onEditingComplete: () {
-              unawaited(_saveName());
-              FocusScope.of(context).unfocus();
-            },
-            onTapOutside: (_) => unawaited(_saveName()),
-          ),
-          _section('输入对方的邀请码'),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    // 不用 AlertDialog：它要算固有宽度，而二维码控件不支持。
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _codeController,
-                  decoration: InputDecoration(
-                    hintText: '粘贴邀请码',
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                    errorText: _joinError,
-                    errorMaxLines: 2,
-                  ),
-                  onSubmitted: (_) => unawaited(_join()),
-                ),
+              Text('添加联系人', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 16),
+              Flexible(
+                child: SingleChildScrollView(child: _buildBody(context)),
               ),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed: _joining ? null : () => unawaited(_join()),
-                child: const Text('配对'),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('关闭'),
+                ),
               ),
             ],
           ),
-          for (final join in joins) _buildJoin(join),
-          _section('让对方添加我'),
-          _buildInvitation(),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _section(String title) => Padding(
-        padding: const EdgeInsets.only(top: 20, bottom: 8),
-        child: Text(
-          title,
-          style: const TextStyle(color: AppTheme.darkGray, fontSize: 12, fontWeight: FontWeight.w500),
+  Widget _buildBody(BuildContext context) {
+    final requests = _manager.incomingRequests;
+    final joins = _manager.joins;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final request in requests) _buildRequest(request),
+        _section('我的名字', first: true),
+        TextField(
+          controller: _nameController,
+          maxLength: 64,
+          decoration: const InputDecoration(
+            hintText: '配对时显示给对方（可留空）',
+            border: OutlineInputBorder(),
+            counterText: '',
+            isDense: true,
+          ),
+          onEditingComplete: () {
+            unawaited(_saveName());
+            FocusScope.of(context).unfocus();
+          },
+          onTapOutside: (_) => unawaited(_saveName()),
         ),
-      );
+        _section('输入对方的邀请码'),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _codeController,
+                decoration: InputDecoration(
+                  hintText: '粘贴邀请码',
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                  errorText: _joinError,
+                  errorMaxLines: 2,
+                ),
+                onSubmitted: (_) => unawaited(_join()),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: _joining ? null : () => unawaited(_join()),
+              child: const Text('配对'),
+            ),
+          ],
+        ),
+        for (final join in joins) _buildJoin(join),
+        _section('让对方添加我'),
+        _buildInvitation(),
+      ],
+    );
+  }
+
+  Widget _section(String title, {bool first = false}) => Padding(
+    padding: EdgeInsets.only(top: first ? 0 : 20, bottom: 8),
+    child: Text(
+      title,
+      style: const TextStyle(
+        color: AppTheme.darkGray,
+        fontSize: 12,
+        fontWeight: FontWeight.w500,
+      ),
+    ),
+  );
 
   Widget _buildRequest(IncomingPairRequest request) {
     final name = request.name.isEmpty ? '（未填名字）' : request.name;
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(border: Border.all(color: AppTheme.black, width: 1)),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppTheme.black, width: 1),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('$name 请求添加你', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+          Text(
+            '$name 请求添加你',
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          ),
           const SizedBox(height: 8),
           const Text(
             '安全码（和对方屏幕上的核对一致再批准）：',
@@ -261,9 +318,18 @@ class _PairingPageState extends State<PairingPage> {
       padding: const EdgeInsets.only(top: 8),
       child: Row(
         children: [
-          const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5)),
+          const SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(strokeWidth: 1.5),
+          ),
           const SizedBox(width: 8),
-          Expanded(child: Text(text, style: const TextStyle(fontSize: 12, color: AppTheme.darkGray))),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 12, color: AppTheme.darkGray),
+            ),
+          ),
           TextButton(
             onPressed: () => unawaited(_manager.cancelJoin(join.inviteId)),
             child: const Text('取消'),
@@ -295,7 +361,10 @@ class _PairingPageState extends State<PairingPage> {
       children: [
         Center(child: QrImageView(data: code, size: 180)),
         const SizedBox(height: 8),
-        SelectableText(code, style: const TextStyle(fontFamily: 'monospace', fontSize: 13)),
+        SelectableText(
+          code,
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+        ),
         const SizedBox(height: 4),
         Row(
           children: [

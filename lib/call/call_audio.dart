@@ -25,18 +25,56 @@ bool isMonitorAudioDevice(String deviceId, String label) {
   return text.contains('monitor');
 }
 
-/// 从设备列表里选出默认扬声器的 deviceId。跳过 monitor；优先名字里带 default 的，否则取第一个输出设备。
-/// 没有可用设备时返回 null。
-String? pickDefaultPlayoutDeviceId(Iterable<AudioDeviceOption> devices) {
-  final outputs = [
+/// 从设备列表里选出默认扬声器的 deviceId。跳过 monitor。
+///
+/// 依次尝试：系统报告的默认设备 [systemDefaultId]（Windows）、名字里带 default 的
+/// （Linux 的 PulseAudio / PipeWire）、第一个输出设备。
+/// [fallbackToFirst] 为 false 时不取第一个，返回 null 表示不指定、交给系统默认：
+/// Windows 的枚举顺序和默认设备无关，取第一个可能把声音送到显示器之类的设备上。
+String? pickDefaultPlayoutDeviceId(
+  Iterable<AudioDeviceOption> devices, {
+  String? systemDefaultId,
+  bool fallbackToFirst = true,
+}) => _pickDefaultDeviceId(
+  devices,
+  'audiooutput',
+  systemDefaultId: systemDefaultId,
+  fallbackToFirst: fallbackToFirst,
+);
+
+/// 从设备列表里选出默认麦克风的 deviceId，规则同 [pickDefaultPlayoutDeviceId]。
+String? pickDefaultRecordingDeviceId(
+  Iterable<AudioDeviceOption> devices, {
+  String? systemDefaultId,
+  bool fallbackToFirst = true,
+}) => _pickDefaultDeviceId(
+  devices,
+  'audioinput',
+  systemDefaultId: systemDefaultId,
+  fallbackToFirst: fallbackToFirst,
+);
+
+String? _pickDefaultDeviceId(
+  Iterable<AudioDeviceOption> devices,
+  String kind, {
+  String? systemDefaultId,
+  required bool fallbackToFirst,
+}) {
+  final candidates = [
     for (final device in devices)
-      if (device.kind == 'audiooutput' &&
+      if (device.kind == kind &&
           device.deviceId.isNotEmpty &&
           !isMonitorAudioDevice(device.deviceId, device.label))
         device,
   ];
-  if (outputs.isEmpty) return null;
-  for (final device in outputs) {
+  if (candidates.isEmpty) return null;
+  if (systemDefaultId != null && systemDefaultId.isNotEmpty) {
+    final wanted = systemDefaultId.toLowerCase();
+    for (final device in candidates) {
+      if (device.deviceId.toLowerCase() == wanted) return device.deviceId;
+    }
+  }
+  for (final device in candidates) {
     final text = '${device.deviceId} ${device.label}'.toLowerCase();
     if (text.startsWith('default') ||
         text.contains('default:') ||
@@ -44,28 +82,18 @@ String? pickDefaultPlayoutDeviceId(Iterable<AudioDeviceOption> devices) {
       return device.deviceId;
     }
   }
-  return outputs.first.deviceId;
+  return fallbackToFirst ? candidates.first.deviceId : null;
 }
 
-/// 从设备列表里选出默认麦克风的 deviceId。跳过 monitor；优先名字里带 default 的，否则取第一个输入设备。
-String? pickDefaultRecordingDeviceId(Iterable<AudioDeviceOption> devices) {
-  final inputs = [
-    for (final device in devices)
-      if (device.kind == 'audioinput' &&
-          device.deviceId.isNotEmpty &&
-          !isMonitorAudioDevice(device.deviceId, device.label))
-        device,
-  ];
-  if (inputs.isEmpty) return null;
-  for (final device in inputs) {
-    final text = '${device.deviceId} ${device.label}'.toLowerCase();
-    if (text.startsWith('default') ||
-        text.contains('default:') ||
-        text.contains('default ')) {
-      return device.deviceId;
+/// [deviceId] 对应的设备名，给通话诊断显示；名字为空时用 id，找不到返回 null。
+String? deviceLabelFor(Iterable<AudioDeviceOption> devices, String? deviceId) {
+  if (deviceId == null) return null;
+  for (final device in devices) {
+    if (device.deviceId == deviceId) {
+      return device.label.isEmpty ? device.deviceId : device.label;
     }
   }
-  return inputs.first.deviceId;
+  return null;
 }
 
 /// 通话中给界面看的收发统计。不含 SDP、候选地址或密钥。
@@ -77,6 +105,7 @@ class CallAudioStats {
     this.remoteLevel,
     this.bytesReceived,
     this.remoteEnergy,
+    this.playoutDevice,
   });
 
   final double? localLevel;
@@ -85,6 +114,9 @@ class CallAudioStats {
   final double? remoteLevel;
   final int? bytesReceived;
   final double? remoteEnergy;
+
+  /// 远端声音正在送往的播放设备名；还没选定时为 null。
+  final String? playoutDevice;
 
   /// 通话条上的一行短诊断，例如 `本端↑12.3 KB 0.21  远端↓40.0 KB 0.48`。
   String get compactLabel {

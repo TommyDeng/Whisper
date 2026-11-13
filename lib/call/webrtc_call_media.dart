@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../desktop/window_attention.dart';
 import '../voice/ice_strategy.dart';
 import 'call_audio.dart';
 import 'call_service.dart';
@@ -16,6 +17,23 @@ import 'call_signal.dart';
 
 /// 取 ICE 服务器配置（STUN，以及拿得到的话 TURN 临时凭据）。
 typedef IceConfigLoader = Future<Map<String, dynamic>> Function();
+
+/// 系统当前的默认输出 / 输入设备 id；拿不到的为 null。
+typedef SystemAudioDefaults = ({String? output, String? input});
+
+/// 向原生层问系统默认设备。只有 Windows 需要：那里枚举出来的设备既没有
+/// 带 default 的名字，顺序也和默认设备无关。
+Future<SystemAudioDefaults> loadSystemAudioDefaults() async {
+  if (!Platform.isWindows) return (output: null, input: null);
+  try {
+    final result = await kDesktopChannel.invokeMapMethod<String, String>(
+      'defaultAudioDevices',
+    );
+    return (output: result?['output'], input: result?['input']);
+  } catch (_) {
+    return (output: null, input: null);
+  }
+}
 
 class WebRtcCallMedia implements CallMedia {
   WebRtcCallMedia({required this.loadConfig});
@@ -41,6 +59,9 @@ class WebRtcCallMedia implements CallMedia {
   bool _closed = false;
   bool _connected = false;
   IcePathType? _path;
+
+  /// 实际选中的播放设备名，显示在通话诊断里；没有指定设备时是「系统默认」。
+  String? _playoutLabel;
 
   @override
   Stream<CallCandidate> get candidates => _candidates.stream;
@@ -267,8 +288,9 @@ class WebRtcCallMedia implements CallMedia {
     };
     try {
       final options = await _deviceOptions();
-      final inputId = pickDefaultRecordingDeviceId(options);
-      final outputId = pickDefaultPlayoutDeviceId(options);
+      final defaults = await loadSystemAudioDefaults();
+      final inputId = _pickRecording(options, defaults);
+      final outputId = _pickPlayout(options, defaults);
       // flutter_webrtc 桌面端：sourceId 选麦克风，deviceId 选扬声器（在 GetUserAudio 里调用 SetPlayoutDevice）。
       if (inputId != null) audio['sourceId'] = inputId;
       if (outputId != null) audio['deviceId'] = outputId;
@@ -290,6 +312,26 @@ class WebRtcCallMedia implements CallMedia {
     ];
   }
 
+  // Windows 上找不到系统默认设备时宁可不指定，也不取枚举到的第一个：
+  // 第一个常常是显示器之类的设备，声音会被送到用户没在听的地方。
+  String? _pickPlayout(
+    List<AudioDeviceOption> options,
+    SystemAudioDefaults defaults,
+  ) => pickDefaultPlayoutDeviceId(
+    options,
+    systemDefaultId: defaults.output,
+    fallbackToFirst: !Platform.isWindows,
+  );
+
+  String? _pickRecording(
+    List<AudioDeviceOption> options,
+    SystemAudioDefaults defaults,
+  ) => pickDefaultRecordingDeviceId(
+    options,
+    systemDefaultId: defaults.input,
+    fallbackToFirst: !Platform.isWindows,
+  );
+
   Future<void> _selectDefaultDevices() async {
     await _selectDefaultRecording();
     await _selectDefaultPlayout();
@@ -297,7 +339,10 @@ class WebRtcCallMedia implements CallMedia {
 
   Future<void> _selectDefaultRecording() async {
     try {
-      final id = pickDefaultRecordingDeviceId(await _deviceOptions());
+      final id = _pickRecording(
+        await _deviceOptions(),
+        await loadSystemAudioDefaults(),
+      );
       if (id == null || _closed) return;
       await Helper.selectAudioInput(id);
     } catch (_) {
@@ -307,10 +352,15 @@ class WebRtcCallMedia implements CallMedia {
 
   Future<void> _selectDefaultPlayout() async {
     try {
-      final id =
-          pickDefaultPlayoutDeviceId(await _deviceOptions()) ?? 'default';
+      final options = await _deviceOptions();
+      final id = _pickPlayout(options, await loadSystemAudioDefaults());
       if (_closed) return;
+      if (id == null) {
+        _playoutLabel = '系统默认';
+        return;
+      }
       await Helper.selectAudioOutput(id);
+      _playoutLabel = deviceLabelFor(options, id);
     } catch (_) {
       // 本机或平台不支持选择输出设备时保持系统默认
     }
@@ -366,16 +416,15 @@ class WebRtcCallMedia implements CallMedia {
       _levels.add(level);
       if (!_stats.isClosed) {
         _stats.add(
-          _muted
-              ? CallAudioStats(
-                  localLevel: 0,
-                  bytesSent: stats.bytesSent,
-                  localEnergy: stats.localEnergy,
-                  remoteLevel: stats.remoteLevel,
-                  bytesReceived: stats.bytesReceived,
-                  remoteEnergy: stats.remoteEnergy,
-                )
-              : stats,
+          CallAudioStats(
+            localLevel: _muted ? 0 : stats.localLevel,
+            bytesSent: stats.bytesSent,
+            localEnergy: stats.localEnergy,
+            remoteLevel: stats.remoteLevel,
+            bytesReceived: stats.bytesReceived,
+            remoteEnergy: stats.remoteEnergy,
+            playoutDevice: _playoutLabel,
+          ),
         );
       }
     } catch (_) {

@@ -1,5 +1,8 @@
 /// 新消息提醒：窗口隐藏或失去焦点时，闪任务栏按钮，并让托盘图标闪烁。
 ///
+/// 托盘图标是整个一亮一灭（带红点的图标和空白图标交替）。1.0.4 是在普通图标和
+/// 带红点图标之间交替，两张图只差角上一个红点，在托盘那么小的尺寸上看不出在闪。
+///
 /// 只闪任务栏按钮不够：关到托盘后窗口是隐藏的，没有按钮可闪；
 /// Wayland 下 GTK 的紧急提示也不起作用。托盘图标在这两种情况下都还在。
 library;
@@ -36,12 +39,13 @@ Future<void> flashTaskbarIfNeeded(UiFocus focus) async {
   } catch (_) {}
 }
 
-/// 让托盘图标在普通图标和带红点的提醒图标之间交替，直到 [stop]。
+/// 让托盘图标在带红点的提醒图标和空白图标之间交替，直到 [stop] 恢复普通图标。
 class TrayBlinker {
   TrayBlinker({
     required this.setIcon,
     required this.normalIcon,
     required this.alertIcon,
+    required this.blankIcon,
   });
 
   /// 两次换图标之间的间隔。
@@ -51,6 +55,9 @@ class TrayBlinker {
   final String normalIcon;
   final String alertIcon;
 
+  /// 全透明的图标，闪烁中“灭”的那一拍。
+  final String blankIcon;
+
   Timer? _timer;
   var _alertShown = false;
 
@@ -59,8 +66,12 @@ class TrayBlinker {
   /// 开始闪烁；已经在闪就什么也不做。
   void start() {
     if (_timer != null) return;
-    _show(true);
-    _timer = Timer.periodic(interval, (_) => _show(!_alertShown));
+    _alertShown = true;
+    _set(alertIcon);
+    _timer = Timer.periodic(interval, (_) {
+      _alertShown = !_alertShown;
+      _set(_alertShown ? alertIcon : blankIcon);
+    });
   }
 
   /// 停止闪烁并恢复普通图标。
@@ -69,16 +80,12 @@ class TrayBlinker {
     if (timer == null) return;
     timer.cancel();
     _timer = null;
-    _show(false);
+    _alertShown = false;
+    _set(normalIcon);
   }
 
-  void _show(bool alert) {
-    _alertShown = alert;
+  void _set(String icon) {
     // 托盘不可用时换图标会失败，不能让它变成未处理的异步错误。
-    unawaited(
-      Future<void>.sync(
-        () => setIcon(alert ? alertIcon : normalIcon),
-      ).catchError((Object _) {}),
-    );
+    unawaited(Future<void>.sync(() => setIcon(icon)).catchError((Object _) {}));
   }
 }

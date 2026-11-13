@@ -33,7 +33,8 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
   StreamSubscription<RTCVideoRenderer?>? _renderers;
   StreamSubscription<RTCVideoRenderer?>? _localRenderers;
   StreamSubscription<CallAudioStats>? _audioStatsSub;
-  StreamSubscription<({String sessionId, String msgId, bool isFile})>? _incomingChat;
+  StreamSubscription<({String sessionId, String msgId, bool isFile})>?
+  _incomingChat;
   StreamSubscription<String>? _incomingFiles;
   final _sounds = CallSound();
   final _messageSound = MessageSound();
@@ -272,7 +273,9 @@ class CallBar extends StatelessWidget {
                         snapshot.phase == CallPhase.outgoing) ...[
                       const SizedBox(height: 2),
                       Tooltip(
-                        message: '本端↑是麦克风发出去的电平和字节，远端↓是收到对方的。用来判断是哪一侧没有声音。',
+                        message:
+                            '本端↑是麦克风发出去的电平和字节，远端↓是收到对方的。用来判断是哪一侧没有声音。\n'
+                            '播放设备：${audioStats.playoutDevice ?? '未知'}',
                         child: Text(
                           audioStats.compactLabel,
                           style: const TextStyle(

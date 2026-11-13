@@ -212,4 +212,81 @@ void main() {
       expect(stats.compactLabel, contains('?'));
     });
   });
+
+  group('按系统默认设备选（Windows）', () {
+    // Windows 上设备没有带 default 的名字，枚举顺序也不是默认设备在前。
+    const devices = [
+      AudioDeviceOption(
+        deviceId: '{0.0.0.00000000}.{AAAA}',
+        label: 'DELL U2720Q (NVIDIA High Definition Audio)',
+      ),
+      AudioDeviceOption(
+        deviceId: '{0.0.0.00000000}.{BBBB}',
+        label: '扬声器 (Realtek(R) Audio)',
+      ),
+      AudioDeviceOption(
+        deviceId: '{0.0.1.00000000}.{CCCC}',
+        label: '麦克风 (USB Audio)',
+        kind: 'audioinput',
+      ),
+      AudioDeviceOption(
+        deviceId: '{0.0.1.00000000}.{DDDD}',
+        label: '麦克风阵列 (Realtek(R) Audio)',
+        kind: 'audioinput',
+      ),
+    ];
+
+    test('系统默认设备在列表里就选它，不管排第几、大小写是否一致', () {
+      expect(
+        pickDefaultPlayoutDeviceId(
+          devices,
+          systemDefaultId: '{0.0.0.00000000}.{bbbb}',
+          fallbackToFirst: false,
+        ),
+        '{0.0.0.00000000}.{BBBB}',
+      );
+      expect(
+        pickDefaultRecordingDeviceId(
+          devices,
+          systemDefaultId: '{0.0.1.00000000}.{DDDD}',
+          fallbackToFirst: false,
+        ),
+        '{0.0.1.00000000}.{DDDD}',
+      );
+    });
+
+    test('查不到系统默认设备时不乱选第一个，交给系统', () {
+      expect(
+        pickDefaultPlayoutDeviceId(devices, fallbackToFirst: false),
+        isNull,
+      );
+      expect(
+        pickDefaultPlayoutDeviceId(
+          devices,
+          systemDefaultId: '{0.0.0.00000000}.{ZZZZ}',
+          fallbackToFirst: false,
+        ),
+        isNull,
+      );
+      expect(
+        pickDefaultRecordingDeviceId(devices, fallbackToFirst: false),
+        isNull,
+      );
+    });
+
+    test('不传参数时行为不变：没有 default 就取第一个', () {
+      expect(pickDefaultPlayoutDeviceId(devices), '{0.0.0.00000000}.{AAAA}');
+    });
+  });
+
+  test('deviceLabelFor 按 id 找设备名', () {
+    const devices = [
+      AudioDeviceOption(deviceId: 'a', label: '扬声器'),
+      AudioDeviceOption(deviceId: 'b', label: ''),
+    ];
+    expect(deviceLabelFor(devices, 'a'), '扬声器');
+    expect(deviceLabelFor(devices, 'b'), 'b');
+    expect(deviceLabelFor(devices, 'x'), isNull);
+    expect(deviceLabelFor(devices, null), isNull);
+  });
 }

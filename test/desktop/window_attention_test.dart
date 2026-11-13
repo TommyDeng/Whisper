@@ -36,18 +36,19 @@ class _Icons {
 
 void trayBlinkTests() {
   group('托盘图标闪烁', () {
-    test('开始后在提醒图标和普通图标之间交替', () {
+    test('开始后在提醒图标和空白图标之间交替', () {
       fakeAsync((async) {
         final icons = _Icons();
         final blinker = TrayBlinker(
           setIcon: icons.set,
           normalIcon: 'normal',
           alertIcon: 'alert',
+          blankIcon: 'blank',
         );
         blinker.start();
         expect(icons.shown, ['alert']);
         async.elapse(TrayBlinker.interval * 3);
-        expect(icons.shown, ['alert', 'normal', 'alert', 'normal']);
+        expect(icons.shown, ['alert', 'blank', 'alert', 'blank']);
         expect(blinker.active, isTrue);
         blinker.stop();
       });
@@ -60,11 +61,12 @@ void trayBlinkTests() {
           setIcon: icons.set,
           normalIcon: 'normal',
           alertIcon: 'alert',
+          blankIcon: 'blank',
         );
         blinker.start();
         blinker.start();
         async.elapse(TrayBlinker.interval);
-        expect(icons.shown, ['alert', 'normal']);
+        expect(icons.shown, ['alert', 'blank']);
         blinker.stop();
       });
     });
@@ -76,6 +78,7 @@ void trayBlinkTests() {
           setIcon: icons.set,
           normalIcon: 'normal',
           alertIcon: 'alert',
+          blankIcon: 'blank',
         );
         blinker.start();
         blinker.stop();
@@ -92,6 +95,7 @@ void trayBlinkTests() {
         setIcon: icons.set,
         normalIcon: 'normal',
         alertIcon: 'alert',
+        blankIcon: 'blank',
       ).stop();
       expect(icons.shown, isEmpty);
     });
@@ -106,6 +110,7 @@ void trayBlinkTests() {
           },
           normalIcon: 'normal',
           alertIcon: 'alert',
+          blankIcon: 'blank',
         );
         blinker.start();
         async.elapse(TrayBlinker.interval * 2);
