@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -15,6 +17,7 @@ import 'package:whisper/messaging/message_codec.dart';
 import 'package:whisper/messaging/messaging_service.dart';
 import 'package:whisper/storage/storage.dart';
 import 'package:whisper/ui/app_theme.dart';
+import 'package:whisper/ui/chat_images.dart';
 import 'package:whisper/ui/chat_screen.dart';
 import 'package:whisper/ui/file_transfer_ui.dart';
 
@@ -49,6 +52,23 @@ Future<void> _pumpUntil(
   }
   fail('等待超时：$what');
 }
+
+/// 一张 1x1 的 PNG。
+final _png = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'
+  'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+);
+
+/// 等图片真正解码、排版出大小，之后才点得到。
+Future<void> _pumpUntilImageShown(WidgetTester tester) => _pumpUntil(
+  tester,
+  () {
+    final found = find.byType(RawImage).evaluate();
+    return found.isNotEmpty &&
+        (found.first.widget as RawImage).image != null;
+  },
+  what: '图片显示出来',
+);
 
 void main() {
   group('文案', () {
@@ -198,6 +218,67 @@ void main() {
       expect(find.text('whisper-paste-1.png'), findsNothing);
       expect(find.text('已保存'), findsNothing);
       expect(find.byIcon(Icons.insert_drive_file_outlined), findsNothing);
+    });
+
+    testWidgets('图片气泡右键菜单可以复制和另存', (tester) async {
+      final calls = <String>[];
+      final dir = Directory.systemTemp.createTempSync('whisper_img_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final path = '${dir.path}/whisper-paste-1.png';
+      File(path).writeAsBytesSync(_png);
+      await tester.pumpWidget(
+        _wrap(
+          FileMessageBody(
+            name: 'whisper-paste-1.png',
+            size: 2048,
+            isSent: false,
+            localPath: path,
+            onCopyImage: () => calls.add('copy'),
+            onSaveImage: () => calls.add('save'),
+          ),
+        ),
+      );
+      await _pumpUntilImageShown(tester);
+      await tester.tap(find.byType(Image), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      expect(find.text(kCopyImageLabel), findsOneWidget);
+      expect(find.text(kSaveImageLabel), findsOneWidget);
+      await tester.tap(find.text(kCopyImageLabel));
+      await tester.pumpAndSettle();
+      expect(calls, ['copy']);
+
+      await tester.tap(find.byType(Image), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(kSaveImageLabel));
+      await tester.pumpAndSettle();
+      expect(calls, ['copy', 'save']);
+    });
+
+    testWidgets('点开大图后下方有复制和另存按钮', (tester) async {
+      final calls = <String>[];
+      final dir = Directory.systemTemp.createTempSync('whisper_img_');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final path = '${dir.path}/whisper-paste-1.png';
+      File(path).writeAsBytesSync(_png);
+      await tester.pumpWidget(
+        _wrap(
+          FileMessageBody(
+            name: 'whisper-paste-1.png',
+            size: 2048,
+            isSent: false,
+            localPath: path,
+            onCopyImage: () => calls.add('copy'),
+            onSaveImage: () => calls.add('save'),
+          ),
+        ),
+      );
+      await _pumpUntilImageShown(tester);
+      await tester.tap(find.byType(Image));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, kCopyImageLabel));
+      await tester.tap(find.widgetWithText(TextButton, kSaveImageLabel));
+      await tester.pump();
+      expect(calls, ['copy', 'save']);
     });
 
     testWidgets('还没收到本机的图片仍按文件显示', (tester) async {
@@ -357,6 +438,7 @@ void main() {
     late Directory dir;
     late _FakePicker picker;
     late List<String> revealed;
+    late List<String> copied;
 
     setUpAll(() {
       sqfliteFfiInit();
@@ -401,6 +483,7 @@ void main() {
       dir = await Directory.systemTemp.createTemp('whisper_file_ui_');
       picker = _FakePicker();
       revealed = [];
+      copied = [];
     });
 
     tearDown(() async {
@@ -470,6 +553,10 @@ void main() {
             files: files,
             filePicker: picker,
             revealFile: (path) async => revealed.add(path),
+            copyImage: (path) async {
+              copied.add(path);
+              return true;
+            },
           ),
         ),
       );
@@ -571,6 +658,44 @@ void main() {
       await tester.tap(find.text('打开所在位置'));
       await tester.pump();
       expect(revealed, [ok.absolute.path]);
+    });
+
+    testWidgets('图片消息：右键复制、另存为拷到所选位置', (tester) async {
+      final image = File('${dir.path}/截图.png')..writeAsBytesSync(_png);
+      await pumpChat(tester);
+      await tester.runAsync(() => files.sendViaRelay(bobContact, image));
+      await _pumpUntilImageShown(tester);
+
+      await tester.tap(find.byType(Image), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(kCopyImageLabel));
+      await _pumpUntil(
+        tester,
+        () => find.text('已复制图片').evaluate().isNotEmpty,
+        what: '复制成功提示',
+      );
+      expect(copied, [image.absolute.path]);
+
+      final target = File('${dir.path}/另存.png');
+      picker.savePath = target.path;
+      await tester.tap(find.byType(Image), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(kSaveImageLabel));
+      await _pumpUntil(
+        tester,
+        () => target.existsSync(),
+        what: '图片另存完成',
+      );
+      expect(picker.suggested.last, '截图.png');
+      expect(target.readAsBytesSync(), image.readAsBytesSync());
+
+      // 用户取消保存对话框：什么都不做
+      picker.savePath = null;
+      await tester.tap(find.byType(Image), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(kSaveImageLabel));
+      await tester.pumpAndSettle();
+      expect(picker.suggested, hasLength(2));
     });
 
     testWidgets('收到的文件：下载前说明、进度、根据 updates 刷新为已保存', (tester) async {

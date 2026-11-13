@@ -57,7 +57,6 @@ class WebRtcCallMedia implements CallMedia {
   Timer? _levelTimer;
   bool _muted = false;
   bool _closed = false;
-  bool _connected = false;
   IcePathType? _path;
 
   /// 实际选中的播放设备名，显示在通话诊断里；没有指定设备时是「系统默认」。
@@ -119,6 +118,31 @@ class WebRtcCallMedia implements CallMedia {
   @override
   Future<void> acceptAnswer(String sdp) async {
     await _pc?.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+  }
+
+  @override
+  Future<String> restartOffer() async {
+    final pc = _pc;
+    if (pc == null || _closed) throw StateError('已关闭');
+    // 换一套 ICE 凭据并重新收集候选：原来走的网卡没了（例如 ZeroTier 被关掉）时，
+    // 这样才能换到还通的路径上。
+    await pc.restartIce();
+    final offer = await pc.createOffer({
+      'offerToReceiveAudio': true,
+      'offerToReceiveVideo': false,
+    });
+    await pc.setLocalDescription(offer);
+    return offer.sdp!;
+  }
+
+  @override
+  Future<String> acceptRestartOffer(String sdp) async {
+    final pc = _pc;
+    if (pc == null || _closed) throw StateError('已关闭');
+    await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
+    final answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    return answer.sdp!;
   }
 
   @override
@@ -233,15 +257,15 @@ class WebRtcCallMedia implements CallMedia {
       if (_closed) return;
       switch (state) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-          if (!_connected) {
-            _connected = true;
-            _states.add(CallMediaState.connected);
-          }
+          // 断开后重新连上也要报：通话服务靠它结束重连。
+          _states.add(CallMediaState.connected);
           unawaited(_refreshPath());
+        case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
+          // 可能自己恢复；恢复不了时通话服务会做 ICE 重启。
+          _states.add(CallMediaState.disconnected);
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
           _states.add(CallMediaState.failed);
         default:
-          // disconnected 可能自己恢复，恢复不了会变成 failed
           break;
       }
     };

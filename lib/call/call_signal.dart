@@ -27,7 +27,7 @@ class CallCandidate {
 }
 
 class CallSignal {
-  const CallSignal._(this.kind, this.callId, {this.sdp, this.candidate, this.reason});
+  const CallSignal._(this.kind, this.callId, {this.sdp, this.candidate, this.reason, this.seq});
 
   /// 发起呼叫，带 SDP offer。
   const CallSignal.offer(String callId, String sdp) : this._(kindOffer, callId, sdp: sdp);
@@ -45,11 +45,25 @@ class CallSignal {
   /// 结束通话。[reason] 是 [reasonHangup]、[reasonReject]、[reasonBusy] 或 [reasonFailed]。
   const CallSignal.end(String callId, String reason) : this._(kindEnd, callId, reason: reason);
 
+  /// 通话中重连：主叫发的 ICE 重启 offer，[seq] 每次加一。
+  const CallSignal.reoffer(String callId, String sdp, int seq)
+      : this._(kindReoffer, callId, sdp: sdp, seq: seq);
+
+  /// 通话中重连：被叫对 [CallSignal.reoffer] 的应答，[seq] 原样带回。
+  const CallSignal.reanswer(String callId, String sdp, int seq)
+      : this._(kindReanswer, callId, sdp: sdp, seq: seq);
+
+  /// 通话中重连：被叫请主叫发一个 [CallSignal.reoffer]。
+  const CallSignal.restart(String callId) : this._(kindRestart, callId);
+
   static const String kindOffer = 'offer';
   static const String kindAnswer = 'answer';
   static const String kindCandidate = 'candidate';
   static const String kindRinging = 'ringing';
   static const String kindEnd = 'end';
+  static const String kindReoffer = 'reoffer';
+  static const String kindReanswer = 'reanswer';
+  static const String kindRestart = 'restart';
 
   /// 挂断（包括主叫在对方接听前取消）。
   static const String reasonHangup = 'hangup';
@@ -66,13 +80,14 @@ class CallSignal {
   static const int maxCallIdChars = 64;
   static const int maxSdpChars = 20000;
   static const int maxCandidateChars = 2000;
+  static const int maxSeq = 1000000;
 
   final String kind;
 
   /// 一通通话的 ID，由主叫生成（用 `MessageCodec.newMessageId()`）。
   final String callId;
 
-  /// 仅 offer / answer。
+  /// 仅 offer / answer / reoffer / reanswer。
   final String? sdp;
 
   /// 仅 candidate。
@@ -80,6 +95,9 @@ class CallSignal {
 
   /// 仅 end。
   final String? reason;
+
+  /// 仅 reoffer / reanswer。
+  final int? seq;
 
   String encode() => jsonEncode({
         'k': kind,
@@ -89,6 +107,7 @@ class CallSignal {
         if (candidate?.sdpMid != null) 'mid': candidate!.sdpMid,
         if (candidate?.sdpMLineIndex != null) 'line': candidate!.sdpMLineIndex,
         if (reason != null) 'reason': reason,
+        if (seq != null) 'seq': seq,
       });
 
   /// 解析对方发来的信令。格式不对、种类不认识、字段超长时返回 null（调用方忽略）。
@@ -109,6 +128,15 @@ class CallSignal {
         final sdp = json['sdp'];
         if (sdp is! String || sdp.isEmpty || sdp.length > maxSdpChars) return null;
         return CallSignal._(kind as String, callId, sdp: sdp);
+      case kindReoffer:
+      case kindReanswer:
+        final sdp = json['sdp'];
+        final seq = json['seq'];
+        if (sdp is! String || sdp.isEmpty || sdp.length > maxSdpChars) return null;
+        if (seq is! int || seq < 1 || seq > maxSeq) return null;
+        return CallSignal._(kind as String, callId, sdp: sdp, seq: seq);
+      case kindRestart:
+        return CallSignal.restart(callId);
       case kindCandidate:
         final line = json['cand'];
         final mid = json['mid'];

@@ -31,8 +31,8 @@ abstract class CallTransport {
   Stream<({String sessionId, String id})> get dropped;
 }
 
-/// 音频连接的状态。
-enum CallMediaState { connected, failed }
+/// 音频连接的状态。[disconnected] 是暂时不通，可能自己恢复，也可能变成 [failed]。
+enum CallMediaState { connected, disconnected, failed }
 
 /// 一通通话的音频连接（一个 WebRTC PeerConnection 加麦克风）。每通通话新建一个，用完 [close]。
 abstract class CallMedia {
@@ -42,8 +42,14 @@ abstract class CallMedia {
   /// 被叫接听时：打开麦克风，应用对方的 offer，生成 SDP answer。
   Future<String> acceptOffer(String sdp);
 
-  /// 主叫：应用对方的 answer。
+  /// 主叫：应用对方的 answer（首次协商和 ICE 重启都用它）。
   Future<void> acceptAnswer(String sdp);
+
+  /// 主叫，通话中：做一次 ICE 重启，生成新的 SDP offer。
+  Future<String> restartOffer();
+
+  /// 被叫，通话中：应用对方 ICE 重启的 offer，生成 SDP answer。
+  Future<String> acceptRestartOffer(String sdp);
 
   /// 加入对方的一个 ICE 候选。只能在 [acceptOffer] / [acceptAnswer] 完成之后调用。
   Future<void> addCandidate(CallCandidate candidate);
@@ -120,6 +126,7 @@ class CallSnapshot {
     this.muted = false,
     this.connectedAt,
     this.endReason,
+    this.reconnecting = false,
   });
 
   final CallPhase phase;
@@ -140,6 +147,9 @@ class CallSnapshot {
 
   /// 仅 [CallPhase.ended]。
   final CallEndReason? endReason;
+
+  /// 仅 [CallPhase.active]：当前路径断了，正在换一条路重新连接。
+  final bool reconnecting;
 }
 
 class CallService {
@@ -148,6 +158,9 @@ class CallService {
     required this.createMedia,
     this.ringTimeout = const Duration(seconds: 45),
     this.connectTimeout = const Duration(seconds: 30),
+    this.reconnectTimeout = const Duration(seconds: 30),
+    this.reconnectGrace = const Duration(seconds: 2),
+    this.reconnectRetry = const Duration(seconds: 8),
   }) {
     _transportSubscriptions.add(transport.incoming.listen(_onIncoming));
     _transportSubscriptions.add(transport.dropped.listen(_onDropped));
@@ -164,6 +177,15 @@ class CallService {
   /// 进入 [CallPhase.connecting] 后音频连接超过这么久还没建立就结束。
   final Duration connectTimeout;
 
+  /// 通话中路径断了以后，超过这么久还没重新连上就结束。
+  final Duration reconnectTimeout;
+
+  /// 媒体报 disconnected 后先等这么久（可能自己恢复），再开始 ICE 重启。
+  final Duration reconnectGrace;
+
+  /// 重连期间每隔这么久再试一次 ICE 重启。
+  final Duration reconnectRetry;
+
   final _changesController = StreamController<CallSnapshot>.broadcast();
   final _transportSubscriptions = <StreamSubscription<dynamic>>[];
   final _mediaSubscriptions = <StreamSubscription<dynamic>>[];
@@ -176,6 +198,21 @@ class CallService {
 
   Timer? _ringTimer;
   Timer? _connectTimer;
+
+  /// 重连总时限；不为 null 即正在重连。
+  Timer? _reconnectTimer;
+
+  /// 下一次 ICE 重启尝试。
+  Timer? _reconnectAttemptTimer;
+
+  /// 这次重连里是否已经试过 ICE 重启。
+  bool _reconnectAttempted = false;
+
+  /// 主叫：最近一次 reoffer 的序号。
+  int _restartSeq = 0;
+
+  /// ICE 重启的各步按到达顺序串行执行。
+  Future<void> _restartChain = Future<void>.value();
 
   /// 呼出时 offer 临时消息的 ID；对方不在线时中继会把它丢回来。
   String? _offerMessageId;
@@ -194,6 +231,10 @@ class CallService {
 
   /// 对方 offer / answer 是否已经应用到媒体；完成前对方的候选只能先存起来。
   bool _acceptDone = false;
+
+  /// 这通来电是否已经开始接听。接听要先打开麦克风，这期间状态还是 incoming；
+  /// 不拦住的话再按一次会建出第二个媒体，通话走第一个，界面和静音却对着第二个。
+  bool _accepting = false;
 
   bool _disposed = false;
 
@@ -260,7 +301,8 @@ class CallService {
   /// 接听来电。不在 [CallPhase.incoming] 时无效果。
   Future<void> accept() async {
     if (_disposed) return;
-    if (_snapshot.phase != CallPhase.incoming) return;
+    if (_snapshot.phase != CallPhase.incoming || _accepting) return;
+    _accepting = true;
 
     final callId = _snapshot.callId!;
     final contact = _snapshot.contact!;
@@ -362,6 +404,7 @@ class CallService {
       muted: muted,
       connectedAt: _snapshot.connectedAt,
       endReason: _snapshot.endReason,
+      reconnecting: _snapshot.reconnecting,
     ));
     _media?.setMuted(muted);
   }
@@ -415,6 +458,8 @@ class CallService {
     _ringTimer = null;
     _connectTimer?.cancel();
     _connectTimer = null;
+    _stopReconnectTimers();
+    _restartSeq = 0;
     _closeMedia();
     _offerMessageId = null;
     _offerSdp = null;
@@ -422,6 +467,7 @@ class CallService {
     _remoteCandidates.clear();
     _canSendCandidates = false;
     _acceptDone = false;
+    _accepting = false;
   }
 
   void _closeMedia() {
@@ -452,6 +498,7 @@ class CallService {
     _ringTimer = null;
     _connectTimer?.cancel();
     _connectTimer = null;
+    _stopReconnectTimers();
     _closeMedia();
 
     if (callId != null) _rememberEnded(callId);
@@ -551,6 +598,15 @@ class CallService {
         break;
       case CallSignal.kindEnd:
         _onEnd(signal);
+        break;
+      case CallSignal.kindReoffer:
+        _onReoffer(signal);
+        break;
+      case CallSignal.kindReanswer:
+        _onReanswer(signal);
+        break;
+      case CallSignal.kindRestart:
+        _onRestartRequest();
         break;
     }
   }
@@ -708,12 +764,181 @@ class CallService {
           muted: _snapshot.muted,
           connectedAt: DateTime.now(),
         ));
+      } else if (phase == CallPhase.active) {
+        _reconnected();
       }
+    } else if (state == CallMediaState.disconnected) {
+      if (phase == CallPhase.active) _beginReconnect(callId, immediate: false);
     } else if (state == CallMediaState.failed) {
-      if (phase == CallPhase.connecting || phase == CallPhase.active) {
+      if (phase == CallPhase.connecting) {
         unawaited(_onMediaFailed(callId));
+      } else if (phase == CallPhase.active) {
+        _beginReconnect(callId, immediate: true);
       }
     }
+  }
+
+  // --- 通话中重连（ICE 重启），见 docs/call-signaling.md ---
+
+  void _stopReconnectTimers() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectAttemptTimer?.cancel();
+    _reconnectAttemptTimer = null;
+    _reconnectAttempted = false;
+  }
+
+  void _emitReconnecting(bool reconnecting) {
+    if (_snapshot.reconnecting == reconnecting) return;
+    _emit(CallSnapshot(
+      phase: _snapshot.phase,
+      contact: _snapshot.contact,
+      callId: _snapshot.callId,
+      isOutgoing: _snapshot.isOutgoing,
+      muted: _snapshot.muted,
+      connectedAt: _snapshot.connectedAt,
+      reconnecting: reconnecting,
+    ));
+  }
+
+  /// 路径断了。[immediate] 为 false 时先等 [reconnectGrace] 看它能不能自己恢复。
+  void _beginReconnect(String callId, {required bool immediate}) {
+    if (_reconnectTimer == null) {
+      _reconnectTimer = Timer(reconnectTimeout, () {
+        unawaited(_onReconnectTimeout(callId));
+      });
+      _emitReconnecting(true);
+    }
+    if (_reconnectAttempted) return; // 已经在按 reconnectRetry 重试
+    if (immediate) {
+      _attemptReconnect(callId);
+    } else {
+      _reconnectAttemptTimer ??= Timer(
+        reconnectGrace,
+        () => _attemptReconnect(callId),
+      );
+    }
+  }
+
+  void _attemptReconnect(String callId) {
+    if (_disposed || _reconnectTimer == null) return;
+    if (!_isSameCall(callId) || _snapshot.phase != CallPhase.active) return;
+    _reconnectAttempted = true;
+    _reconnectAttemptTimer?.cancel();
+    _reconnectAttemptTimer = Timer(
+      reconnectRetry,
+      () => _attemptReconnect(callId),
+    );
+    if (_snapshot.isOutgoing) {
+      _sendRestartOffer(callId);
+    } else {
+      final contact = _snapshot.contact;
+      if (contact != null) {
+        unawaited(_trySend(contact, CallSignal.restart(callId).encode()));
+      }
+    }
+  }
+
+  void _reconnected() {
+    if (_reconnectTimer == null) return;
+    _stopReconnectTimers();
+    _emitReconnecting(false);
+  }
+
+  Future<void> _onReconnectTimeout(String callId) async {
+    if (_disposed || _reconnectTimer == null) return;
+    if (!_isSameCall(callId) || _snapshot.phase != CallPhase.active) return;
+    final contact = _snapshot.contact;
+    if (contact == null) return;
+    await _trySend(contact, CallSignal.end(callId, CallSignal.reasonFailed).encode());
+    if (_isSameCall(callId) && _snapshot.phase == CallPhase.active) {
+      _end(CallEndReason.failed);
+    }
+  }
+
+  bool _isActiveCall(String callId) =>
+      !_disposed && _isSameCall(callId) && _snapshot.phase == CallPhase.active;
+
+  void _enqueueRestart(Future<void> Function() step) {
+    _restartChain = _restartChain.then((_) => step()).catchError((Object _) {
+      // 这一步失败（媒体已关闭等）：下次重试或超时会接着处理。
+    });
+  }
+
+  /// 主叫：做一次 ICE 重启并把新的 offer 发给对方。
+  void _sendRestartOffer(String callId) {
+    _enqueueRestart(() async {
+      final media = _media;
+      final contact = _snapshot.contact;
+      if (!_isActiveCall(callId) || media == null || contact == null) return;
+      final seq = ++_restartSeq;
+      // 新一轮协商：两边的候选都先存着，等 reoffer 发出、reanswer 应用后再放行。
+      _canSendCandidates = false;
+      _acceptDone = false;
+      try {
+        final sdp = await media.restartOffer();
+        if (!_isActiveCall(callId)) return;
+        await _trySend(contact, CallSignal.reoffer(callId, sdp, seq).encode());
+      } finally {
+        if (_isActiveCall(callId)) {
+          _canSendCandidates = true;
+          unawaited(_flushLocalCandidates(callId));
+        }
+      }
+    });
+  }
+
+  /// 主叫：被叫请求重启。
+  void _onRestartRequest() {
+    if (_snapshot.phase != CallPhase.active || !_snapshot.isOutgoing) return;
+    _sendRestartOffer(_snapshot.callId!);
+  }
+
+  /// 被叫：应用主叫的 ICE 重启 offer 并应答。
+  void _onReoffer(CallSignal signal) {
+    if (_snapshot.phase != CallPhase.active || _snapshot.isOutgoing) return;
+    final callId = _snapshot.callId!;
+    final sdp = signal.sdp!;
+    final seq = signal.seq!;
+    // 这之后到的对方候选属于新一轮，等 offer 应用完再加入。
+    _acceptDone = false;
+    _enqueueRestart(() async {
+      final media = _media;
+      final contact = _snapshot.contact;
+      if (!_isActiveCall(callId) || media == null || contact == null) return;
+      _canSendCandidates = false;
+      try {
+        final answer = await media.acceptRestartOffer(sdp);
+        if (!_isActiveCall(callId)) return;
+        _acceptDone = true;
+        unawaited(_flushRemoteCandidates(callId));
+        await _trySend(contact, CallSignal.reanswer(callId, answer, seq).encode());
+      } finally {
+        if (_isActiveCall(callId)) {
+          _acceptDone = true;
+          _canSendCandidates = true;
+          unawaited(_flushRemoteCandidates(callId));
+          unawaited(_flushLocalCandidates(callId));
+        }
+      }
+    });
+  }
+
+  /// 主叫：应用被叫对最近一次 reoffer 的应答。
+  void _onReanswer(CallSignal signal) {
+    if (_snapshot.phase != CallPhase.active || !_snapshot.isOutgoing) return;
+    final callId = _snapshot.callId!;
+    final sdp = signal.sdp!;
+    final seq = signal.seq!;
+    _enqueueRestart(() async {
+      final media = _media;
+      if (!_isActiveCall(callId) || media == null) return;
+      if (seq != _restartSeq) return; // 应答的是已经被新一次重启取代的 offer
+      await media.acceptAnswer(sdp);
+      if (!_isActiveCall(callId) || seq != _restartSeq) return;
+      _acceptDone = true;
+      await _flushRemoteCandidates(callId);
+    });
   }
 
   Future<void> _onMediaFailed(String callId) async {

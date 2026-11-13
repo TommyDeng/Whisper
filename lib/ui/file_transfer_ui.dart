@@ -305,6 +305,8 @@ class FileMessageBody extends StatelessWidget {
     this.onRetry,
     this.onDismiss,
     this.onReveal,
+    this.onCopyImage,
+    this.onSaveImage,
   });
 
   final String name;
@@ -322,6 +324,10 @@ class FileMessageBody extends StatelessWidget {
   final VoidCallback? onDismiss;
   final VoidCallback? onReveal;
 
+  /// 仅图片：复制到剪贴板、另存到别处。右键菜单和大图界面里用。
+  final VoidCallback? onCopyImage;
+  final VoidCallback? onSaveImage;
+
   @override
   Widget build(BuildContext context) {
     final fg = isSent ? AppTheme.white : AppTheme.black;
@@ -336,7 +342,18 @@ class FileMessageBody extends StatelessWidget {
     // 已经在本机的图片只显示图片本身，不再带文件名、大小和「已保存」。
     if (showImage) {
       return GestureDetector(
-        onTap: () => showChatImagePreview(context, localPath!),
+        onTap: () => showChatImagePreview(
+          context,
+          localPath!,
+          onCopy: onCopyImage,
+          onSave: onSaveImage,
+        ),
+        onSecondaryTapUp: (details) => showChatImageMenu(
+          context,
+          details.globalPosition,
+          onCopy: onCopyImage,
+          onSave: onSaveImage,
+        ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: ConstrainedBox(

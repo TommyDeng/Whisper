@@ -57,4 +57,31 @@ void main() {
     final end = CallSignal.decode('{"k":"end","call":"c1","reason":"whatever","extra":1}')!;
     expect(end.reason, 'whatever');
   });
+  group('通话中重连的信令', () {
+    test('reoffer / reanswer / restart 编解码往返', () {
+      final reoffer = CallSignal.decode(const CallSignal.reoffer('c1', 'sdp-o', 2).encode())!;
+      expect(reoffer.kind, CallSignal.kindReoffer);
+      expect(reoffer.callId, 'c1');
+      expect(reoffer.sdp, 'sdp-o');
+      expect(reoffer.seq, 2);
+
+      final reanswer = CallSignal.decode(const CallSignal.reanswer('c1', 'sdp-a', 2).encode())!;
+      expect(reanswer.kind, CallSignal.kindReanswer);
+      expect(reanswer.sdp, 'sdp-a');
+      expect(reanswer.seq, 2);
+
+      final restart = CallSignal.decode(const CallSignal.restart('c1').encode())!;
+      expect(restart.kind, CallSignal.kindRestart);
+      expect(restart.sdp, isNull);
+      expect(restart.seq, isNull);
+    });
+
+    test('缺 sdp、缺 seq 或 seq 越界时返回 null', () {
+      expect(CallSignal.decode('{"k":"reoffer","call":"c1","seq":1}'), isNull);
+      expect(CallSignal.decode('{"k":"reoffer","call":"c1","sdp":"x"}'), isNull);
+      expect(CallSignal.decode('{"k":"reoffer","call":"c1","sdp":"x","seq":0}'), isNull);
+      expect(CallSignal.decode('{"k":"reanswer","call":"c1","sdp":"x","seq":"1"}'), isNull);
+      expect(CallSignal.decode('{"k":"reanswer","call":"c1","sdp":"x","seq":1000001}'), isNull);
+    });
+  });
 }

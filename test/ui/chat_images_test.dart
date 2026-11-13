@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -25,6 +26,40 @@ void main() {
       expect(clipboardImageExtension('jpeg'), 'jpg');
       expect(clipboardImageExtension('image/gif'), 'gif');
       expect(clipboardImageExtension('unknown'), 'png');
+    });
+  });
+
+  group('转成 PNG', () {
+    // 1x1 的 GIF 和 PNG
+    final gif = base64Decode(
+      'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+    );
+    final png = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk'
+      'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    );
+
+    test('识别 PNG 文件头', () {
+      expect(isPngBytes(png), isTrue);
+      expect(isPngBytes(gif), isFalse);
+      expect(isPngBytes(const [0x89, 0x50]), isFalse);
+    });
+
+    testWidgets('PNG 原样返回，其它格式重新编码成 PNG', (tester) async {
+      await tester.runAsync(() async {
+        expect(await imageBytesAsPng(png), same(png));
+        final converted = await imageBytesAsPng(gif);
+        expect(isPngBytes(converted), isTrue);
+      });
+    });
+
+    testWidgets('不是图片时抛异常', (tester) async {
+      await tester.runAsync(() async {
+        await expectLater(
+          imageBytesAsPng(Uint8List.fromList([1, 2, 3, 4])),
+          throwsA(anything),
+        );
+      });
     });
   });
 

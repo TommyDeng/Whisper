@@ -123,6 +123,7 @@ class ChatScreen extends StatefulWidget {
   final FileShareService? files;
   final FileLocationPicker? filePicker;
   final Future<void> Function(String path)? revealFile;
+  final Future<bool> Function(String path)? copyImage;
 
   const ChatScreen({
     super.key,
@@ -132,6 +133,7 @@ class ChatScreen extends StatefulWidget {
     this.files,
     this.filePicker,
     this.revealFile,
+    this.copyImage,
   });
 
   @override
@@ -443,6 +445,47 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _copyImage(String path) async {
+    final copy = widget.copyImage ?? copyImageFileToClipboard;
+    final ok = await copy(path);
+    if (ok) {
+      _toast('已复制图片', error: false);
+    } else {
+      _toast('复制图片失败。');
+    }
+  }
+
+  Future<void> _saveImage(String path, String name) async {
+    final String? chosen;
+    try {
+      chosen = await _picker.pickSavePath(suggestedName: name);
+    } catch (_) {
+      _toast('无法打开保存对话框。');
+      return;
+    }
+    if (!mounted || chosen == null || chosen.isEmpty) return;
+    final target = File(chosen);
+    try {
+      if (p.equals(target.absolute.path, File(path).absolute.path)) {
+        _toast('已保存图片', error: false);
+        return;
+      }
+      if (await target.exists()) {
+        if (!mounted) return;
+        final overwrite = await confirmOverwrite(
+          context,
+          p.basename(target.path),
+        );
+        if (!mounted || !overwrite) return;
+      }
+      await File(path).copy(target.path);
+    } on FileSystemException {
+      _toast('保存图片失败。');
+      return;
+    }
+    _toast('已保存图片', error: false);
+  }
+
   bool _pathMissing(String? path) {
     if (path == null) return false;
     try {
@@ -452,10 +495,13 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _toast(String text) {
+  void _toast(String text, {bool error = true}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(text), backgroundColor: AppTheme.red),
+      SnackBar(
+        content: Text(text),
+        backgroundColor: error ? AppTheme.red : null,
+      ),
     );
   }
 
@@ -790,6 +836,12 @@ class _ChatScreenState extends State<ChatScreen> {
                     : null,
                 onReveal: path != null && !_pathMissing(path)
                     ? () => unawaited(_reveal(path))
+                    : null,
+                onCopyImage: path != null
+                    ? () => unawaited(_copyImage(path))
+                    : null,
+                onSaveImage: path != null
+                    ? () => unawaited(_saveImage(path, file.safeName))
                     : null,
               ),
             ),

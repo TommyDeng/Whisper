@@ -14,11 +14,17 @@
 {"k":"candidate","call":"<callId>","cand":"<candidate>","mid":"<sdpMid>","line":0}
 {"k":"ringing","call":"<callId>"}
 {"k":"end","call":"<callId>","reason":"hangup|reject|busy|failed"}
+{"k":"reoffer","call":"<callId>","sdp":"<SDP offer>","seq":1}
+{"k":"reanswer","call":"<callId>","sdp":"<SDP answer>","seq":1}
+{"k":"restart","call":"<callId>"}
 ```
 
-- `k`：种类，取值 `offer`、`answer`、`candidate`、`ringing`、`end`。
+- `k`：种类，取值 `offer`、`answer`、`candidate`、`ringing`、`end`，以及通话中重连用的
+  `reoffer`、`reanswer`、`restart`（见“通话中重连”）。
 - `call`：通话 ID，由主叫用 `MessageCodec.newMessageId()` 生成，最长 64 个字符。
-- `sdp`：仅 `offer` / `answer`，最长 20000 个字符。
+- `sdp`：仅 `offer` / `answer` / `reoffer` / `reanswer`，最长 20000 个字符。
+- `seq`：仅 `reoffer` / `reanswer`，1 到 1000000 的整数；`reanswer` 原样带回它应答的那个
+  `reoffer` 的 `seq`。
 - `cand` / `mid` / `line`：仅 `candidate`；`cand` 最长 2000 个字符，`mid` 可选且最长 64 个字符，
   `line` 可选且在 0 到 1024 之间。
 - `reason`：仅 `end`，取值 `hangup`（挂断/取消）、`reject`（拒接）、`busy`（占线）、`failed`（媒体错误）；
@@ -69,6 +75,7 @@
    `end(<那个 offer 的 callId>, busy)`，当前通话不受影响。
 3. `accept()`：取消响铃定时器，创建媒体并订阅两个流，`acceptOffer(sdp)` 成功后回 `answer`，
    进入 `connecting`，启动 `connectTimeout`。媒体失败则回 `end(failed)` 并以 `failed` 结束。
+   创建媒体期间状态仍是 `incoming`，这期间再调 `accept()` 无效果（同一通来电只创建一个媒体）。
 4. `decline()`：回 `end(reject)`，以 `declined` 结束。响铃期间收到对方任何 `end` 都以
    `missed` 结束。
 
@@ -78,6 +85,33 @@
   完成之后到达的直接 `addCandidate`。
 - 本端的候选：自己的 offer / answer 发出之前先存起来，发出后按顺序各发一条 `candidate`；
   之后产生的直接发。
+
+## 通话中重连
+
+通话接通后当前路径断了（例如关掉 ZeroTier、换了网络），不直接挂断，而是做一次 ICE 重启，
+让两边重新收集候选、换到还能通的路径。只有主叫发 `reoffer`，避免两边同时发 offer。
+
+1. `active` 阶段 `media.states` 报 `disconnected` 或 `failed`：快照的 `reconnecting` 变为
+   `true`，启动 `reconnectTimeout`（默认 30 秒）。`connecting` 阶段的 `failed` 仍然直接以
+   `failed` 结束。
+2. 第一次尝试：`failed` 立刻做；`disconnected` 等 `reconnectGrace`（默认 2 秒，给 WebRTC
+   自己切到备用候选对的机会）后还没恢复再做。之后每隔 `reconnectRetry`（默认 8 秒）再试一次，
+   直到恢复或超时。
+3. 一次尝试：主叫调 `media.restartOffer()`，发 `reoffer`（`seq` 每次加一）；被叫发 `restart`
+   请主叫这么做。
+4. 主叫在 `active` 阶段收到 `restart`：发一个新的 `reoffer`（自己这边媒体正常时不进入
+   `reconnecting`）。
+5. 被叫在 `active` 阶段收到 `reoffer`：`media.acceptRestartOffer(sdp)`，回带同一个 `seq` 的
+   `reanswer`。主叫收到 `seq` 等于自己最近一次 `reoffer` 的 `reanswer` 才
+   `media.acceptAnswer(sdp)`，其它的忽略。
+6. 候选的暂存规则和首次协商一样：自己的 `reoffer` / `reanswer` 发出之前本端候选先存着；
+   对方的 `reoffer` / `reanswer` 应用完成之前对方候选先存着。
+7. `media.states` 报 `connected`：`reconnecting` 变回 `false`，取消重连的定时器，
+   `connectedAt` 不变（通话时长不清零）。
+8. `reconnectTimeout` 到了还没恢复：发 `end(failed)`，以 `failed` 结束。
+
+旧版本客户端不认识这三种信令，会直接忽略；和旧版本通话时路径断了，结果和以前一样是超时后
+以 `failed` 结束。
 
 ## 超时、占线与防重放
 
