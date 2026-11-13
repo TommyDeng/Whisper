@@ -1,4 +1,4 @@
-# 交接说明（2026-11-13，1.0.5）
+# 交接说明（2026-11-13，1.0.6）
 
 给接手的 Agent。先读根目录的 `CLAUDE.md`（工作方式和检查命令），再读这份。
 
@@ -39,7 +39,7 @@
 - 「关于」里加了开机自动启动开关（`lib/desktop/autostart.dart`）：Linux 写 `~/.config/autostart/whisper.desktop`，Windows 用 `reg` 写当前用户的 `Run` 项；开关状态直接读系统。自启动时窗口正常显示，没有做“启动后藏到托盘”。
 - 本机较新的 libayatana 把 `app_indicator_new` 标成弃用，tray_manager 在 `-Werror` 下编不过（CI 的 ubuntu-latest 不受影响）；加上之前缺 `libgstreamer1.0-dev`，本机仍然构建不了 Linux 包。
 
-分支 `feat/auto-update-start-hidden`（2026-11-13，1.0.5 之后，未发版）：
+1.0.6（`1.0.6+8`，2026-11-13，PR #43）：
 
 - 1.0.5 实测：两边通话都有声音了（Windows 按系统默认设备播放的修复有效）；Linux 托盘闪烁正常。
 - Windows 托盘仍不闪的原因：`FlashWindowEx` 闪任务栏时会给窗口发 `WM_NCACTIVATE`，window_manager 把它报成 focus 事件，`onWindowFocus` 就把闪烁停了，还把窗口记成在前台。现在 Windows 上收到 focus / blur 先用 `refreshFocus()` 问真实状态。空白 ico 也改成和未读图标一样的 BMP 格式。没有 Windows 机器，未实测。
