@@ -55,6 +55,10 @@ class WebRtcCallMedia implements CallMedia {
   bool _remoteRendererReady = false;
   bool _localRendererReady = false;
   Timer? _levelTimer;
+  var _levelTicks = 0;
+
+  /// 电平定时器每 200ms 一拍，每 5 拍（1 秒）核对一次通话路径。
+  static const _pathCheckEveryTicks = 5;
   bool _muted = false;
   bool _closed = false;
   IcePathType? _path;
@@ -434,8 +438,14 @@ class WebRtcCallMedia implements CallMedia {
     try {
       final pc = _pc;
       if (pc == null || _closed) return;
-      final stats = callAudioStatsFromReports(await pc.getStats());
+      final reports = await pc.getStats();
+      final stats = callAudioStatsFromReports(reports);
       if (_closed || _levels.isClosed) return;
+      // 选中的候选对可能在连接状态不变的情况下换掉（一条路断了，ICE 直接改用
+      // 另一条还通着的），这时没有任何事件。所以顺着这份统计每秒核对一次路径。
+      if (++_levelTicks % _pathCheckEveryTicks == 0) {
+        unawaited(_refreshPath(reports));
+      }
       final level = _muted ? 0.0 : (stats.localLevel ?? 0);
       _levels.add(level);
       if (!_stats.isClosed) {
@@ -457,11 +467,11 @@ class WebRtcCallMedia implements CallMedia {
   }
 
   /// 从统计信息里找出选中的候选对，判断走的是哪条路径。
-  Future<void> _refreshPath() async {
+  Future<void> _refreshPath([List<StatsReport>? known]) async {
     try {
       final pc = _pc;
       if (pc == null) return;
-      final reports = await pc.getStats();
+      final reports = known ?? await pc.getStats();
       final byId = {for (final report in reports) report.id: report};
 
       String? pairId;

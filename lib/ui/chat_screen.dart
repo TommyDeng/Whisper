@@ -5,6 +5,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' hide MessageCodec;
@@ -76,16 +77,17 @@ class ChatBubble extends StatelessWidget {
         Flexible(
           child: Container(
             constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.7,
+              // 宽窗口里气泡不跟着无限变宽，一行太长不好读。
+              maxWidth: math.min(MediaQuery.of(context).size.width * 0.7, 560),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
             decoration: BoxDecoration(
               color: isSent ? AppTheme.black : AppTheme.surface,
               borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(6),
-                topRight: const Radius.circular(6),
-                bottomLeft: Radius.circular(isSent ? 6 : 0),
-                bottomRight: Radius.circular(isSent ? 0 : 6),
+                topLeft: const Radius.circular(14),
+                topRight: const Radius.circular(14),
+                bottomLeft: Radius.circular(isSent ? 14 : 4),
+                bottomRight: Radius.circular(isSent ? 4 : 14),
               ),
             ),
             child:
@@ -95,6 +97,7 @@ class ChatBubble extends StatelessWidget {
                   style: TextStyle(
                     color: fg,
                     fontSize: 14,
+                    height: 1.45,
                     fontWeight: FontWeight.w400,
                   ),
                 ),
@@ -607,19 +610,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: Text(
                   widget.contactName,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppTheme.black,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w500,
-                  ),
                 ),
               ),
             ],
           ),
         ),
-        centerTitle: false,
-        elevation: 0,
-        backgroundColor: AppTheme.white,
+        shape: const Border(bottom: BorderSide(color: AppTheme.lightGray)),
         actions: [
           IconButton(
             tooltip: '语音通话',
@@ -638,13 +634,14 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(20),
+          preferredSize: const Size.fromHeight(26),
           child: Container(
             width: double.infinity,
-            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 6),
+            padding: const EdgeInsets.only(left: 56, right: 16, bottom: 8),
             child: Text(
-              _linkText,
-              style: const TextStyle(color: AppTheme.midGray, fontSize: 11),
+              '${_verified ? '已验证' : '未验证'} · $_linkText',
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppTheme.midGray, fontSize: 12),
             ),
           ),
         ),
@@ -682,30 +679,20 @@ class _ChatScreenState extends State<ChatScreen> {
                   : () => _files.cancel(state.id),
             ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.fromLTRB(8, 10, 12, 10),
             decoration: const BoxDecoration(
-              color: AppTheme.surface,
+              color: AppTheme.white,
               border: Border(
                 top: BorderSide(color: AppTheme.lightGray, width: 1),
               ),
             ),
             child: Row(
               children: [
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text(
-                    '${_verified ? '已验证' : '未验证'}${_burn ? ' · 阅后即焚' : ''}',
-                    style: const TextStyle(
-                      color: AppTheme.midGray,
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
                 IconButton(
                   tooltip: _burn ? kBurnDisablesFileSend : '发送文件',
                   icon: Icon(
                     Icons.attach_file,
-                    color: _burn ? AppTheme.midGray : AppTheme.black,
+                    color: _burn ? AppTheme.lightGray : AppTheme.darkGray,
                   ),
                   onPressed: _burn ? null : () => unawaited(_sendFile()),
                 ),
@@ -728,7 +715,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       focusNode: _focusNode,
                       autofocus: true,
                       decoration: InputDecoration(
-                        hintText: '输入消息...',
+                        hintText: _burn ? '输入消息（阅后即焚）' : '输入消息',
                         hintStyle: const TextStyle(
                           color: AppTheme.midGray,
                           fontSize: 14,
@@ -738,10 +725,11 @@ class _ChatScreenState extends State<ChatScreen> {
                           borderSide: BorderSide.none,
                         ),
                         filled: true,
-                        fillColor: AppTheme.white,
+                        fillColor: AppTheme.surface,
+                        isDense: true,
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 16,
-                          vertical: 8,
+                          vertical: 11,
                         ),
                       ),
                       maxLines: 1,
@@ -785,9 +773,25 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (_messages.isEmpty) {
       return const Center(
-        child: Text(
-          '暂无消息',
-          style: TextStyle(color: AppTheme.darkGray, fontSize: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_outline, size: 32, color: AppTheme.lightGray),
+            SizedBox(height: 14),
+            Text(
+              '暂无消息',
+              style: TextStyle(
+                color: AppTheme.black,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            SizedBox(height: 6),
+            Text(
+              '消息端到端加密，只有你们两人能看到',
+              style: TextStyle(color: AppTheme.midGray, fontSize: 13),
+            ),
+          ],
         ),
       );
     }

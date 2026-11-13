@@ -116,6 +116,11 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
 
   void _onChange(CallSnapshot snapshot) {
     if (!mounted) return;
+    // 来电和新消息一样要闪任务栏和托盘：窗口在后台或关到托盘时，光靠铃声容易漏。
+    if (snapshot.phase == CallPhase.incoming &&
+        _snapshot.phase != CallPhase.incoming) {
+      unawaited(_services.window.flashIfNeeded());
+    }
     setState(() {
       _snapshot = snapshot;
       if (snapshot.phase == CallPhase.idle ||
@@ -221,73 +226,113 @@ class CallBar extends StatelessWidget {
     final name = snapshot.contact?.name ?? '';
     final displayName = name.isEmpty ? '未命名联系人' : name;
     final status = callStatusText(snapshot, now ?? DateTime.now());
+    final active = snapshot.phase == CallPhase.active;
+    final live = active && !snapshot.reconnecting;
+    final showStats =
+        active ||
+        snapshot.phase == CallPhase.connecting ||
+        snapshot.phase == CallPhase.outgoing;
+    const detailStyle = TextStyle(
+      color: AppTheme.midGray,
+      fontSize: 11,
+      fontFeatures: AppTheme.tabularFigures,
+    );
     return Material(
-      color: AppTheme.surface,
-      elevation: 1,
+      color: AppTheme.white,
       child: SafeArea(
         bottom: false,
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
           decoration: const BoxDecoration(
             border: Border(bottom: BorderSide(color: AppTheme.lightGray)),
           ),
           child: Row(
             children: [
-              const Icon(Icons.call_outlined, size: 20, color: AppTheme.black),
-              const SizedBox(width: 10),
+              // 接通后是绿色，其余阶段是黑白：一眼能看出电话通没通。
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: live ? AppTheme.greenTint : AppTheme.surface,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  snapshot.phase == CallPhase.ended
+                      ? Icons.call_end_outlined
+                      : Icons.call_outlined,
+                  size: 18,
+                  color: live ? AppTheme.green : AppTheme.black,
+                ),
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      displayName,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppTheme.black,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      status,
-                      style: const TextStyle(
-                        color: AppTheme.darkGray,
-                        fontSize: 12,
-                      ),
-                    ),
-                    if (snapshot.phase == CallPhase.active && path != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        '端到端加密 · ${callPathLabel(path!)}',
-                        style: const TextStyle(
-                          color: AppTheme.midGray,
-                          fontSize: 11,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            displayName,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppTheme.black,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
+                        const SizedBox(width: 10),
+                        Text(
+                          status,
+                          style: TextStyle(
+                            color: live ? AppTheme.green : AppTheme.darkGray,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            fontFeatures: AppTheme.tabularFigures,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (active && path != null) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.lock_outline,
+                            size: 12,
+                            color: AppTheme.darkGray,
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              '端到端加密 · ${callPathLabel(path!)}',
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: AppTheme.darkGray,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
-                    if (snapshot.phase == CallPhase.active ||
-                        snapshot.phase == CallPhase.connecting ||
-                        snapshot.phase == CallPhase.outgoing) ...[
-                      const SizedBox(height: 2),
+                    if (showStats) ...[
+                      const SizedBox(height: 3),
                       Text(
                         audioStats.compactLabel,
-                        style: const TextStyle(
-                          color: AppTheme.midGray,
-                          fontSize: 11,
-                        ),
+                        overflow: TextOverflow.ellipsis,
+                        style: detailStyle,
                       ),
                       if (audioStats.playoutDevice != null) ...[
-                        const SizedBox(height: 2),
+                        const SizedBox(height: 1),
                         Text(
                           '播放设备：${audioStats.playoutDevice}',
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppTheme.midGray,
-                            fontSize: 11,
-                          ),
+                          style: detailStyle,
                         ),
                       ],
                     ],
@@ -321,7 +366,7 @@ class CallBar extends StatelessWidget {
           _BarButton(
             label: '接听',
             icon: Icons.call,
-            filled: AppTheme.black,
+            filled: AppTheme.green,
             onPressed: () => unawaited(_calls.accept()),
           ),
         ];
@@ -386,8 +431,8 @@ class _BarButton extends StatelessWidget {
               customBorder: const CircleBorder(),
               onTap: onPressed,
               child: SizedBox(
-                width: 36,
-                height: 36,
+                width: 38,
+                height: 38,
                 child: Icon(
                   icon,
                   color: filled == null ? AppTheme.black : AppTheme.white,
@@ -493,17 +538,19 @@ class MicLevelBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final filled = (level.clamp(0.0, 1.0) * _segments).ceil();
     return SizedBox(
-      width: 72,
-      height: 8,
+      width: 56,
+      height: 6,
       child: Row(
+        // 不拉伸的话每一格高度是 0，整条电平条看不见。
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (var i = 0; i < _segments; i++) ...[
             if (i > 0) const SizedBox(width: 2),
             Expanded(
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: i < filled ? AppTheme.black : AppTheme.lightGray,
-                  borderRadius: BorderRadius.circular(1),
+                  color: i < filled ? AppTheme.green : AppTheme.lightGray,
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
             ),
