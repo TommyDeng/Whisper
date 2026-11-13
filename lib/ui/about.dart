@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../desktop/autostart.dart';
 import 'app_theme.dart';
 
 /// 发布页，给用户下载客户端。
@@ -23,8 +24,11 @@ String formatAppVersion(String version, String build) {
   return '$v（$b）';
 }
 
-/// 弹出关于对话框。
-Future<void> showAboutWhisperDialog(BuildContext context) async {
+/// 弹出关于对话框。[autostart] 为 null 时不显示开机启动开关。
+Future<void> showAboutWhisperDialog(
+  BuildContext context, {
+  Autostart? autostart,
+}) async {
   var versionText = '正在读取版本…';
   try {
     final info = await PackageInfo.fromPlatform();
@@ -81,6 +85,7 @@ Future<void> showAboutWhisperDialog(BuildContext context) async {
               ),
             ],
           ),
+          if (autostart != null) AutostartSwitch(autostart: autostart),
         ],
       ),
       actions: [
@@ -91,6 +96,101 @@ Future<void> showAboutWhisperDialog(BuildContext context) async {
       ],
     ),
   );
+}
+
+/// 「开机自动启动」开关。状态直接读系统里的启动项，改动立即生效。
+class AutostartSwitch extends StatefulWidget {
+  const AutostartSwitch({super.key, required this.autostart});
+
+  final Autostart autostart;
+
+  @override
+  State<AutostartSwitch> createState() => _AutostartSwitchState();
+}
+
+class _AutostartSwitchState extends State<AutostartSwitch> {
+  /// 还没读到系统状态时为 null，开关先不可点。
+  bool? _enabled;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    bool enabled;
+    try {
+      enabled = await widget.autostart.isEnabled();
+    } catch (_) {
+      enabled = false;
+    }
+    if (mounted) setState(() => _enabled = enabled);
+  }
+
+  Future<void> _set(bool value) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    String? error;
+    try {
+      await widget.autostart.setEnabled(value);
+    } catch (_) {
+      error = '设置没有成功';
+    }
+    bool enabled;
+    try {
+      enabled = await widget.autostart.isEnabled();
+    } catch (_) {
+      enabled = _enabled ?? false;
+    }
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _enabled = enabled;
+      _error = error;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = _enabled;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '开机自动启动',
+                  style: TextStyle(color: AppTheme.black, fontSize: 14),
+                ),
+                if (_error != null)
+                  Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: AppTheme.darkGray,
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Switch(
+            value: enabled ?? false,
+            onChanged: enabled == null || _busy
+                ? null
+                : (value) => unawaited(_set(value)),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 打开失败时静默忽略，避免关于框被异常打断。

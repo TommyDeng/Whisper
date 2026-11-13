@@ -1,10 +1,44 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <string>
 
 #include <windows.h>
 
+#include <mmdeviceapi.h>
+
+#include "utils.h"
+
 #include "flutter/generated_plugin_registrant.h"
+
+namespace {
+
+// 系统当前默认的播放（eRender）或录音（eCapture）设备的端点 ID，取不到时为空串。
+// 通话用它在 WebRTC 枚举出的设备里找到系统默认的那个；主线程已初始化 COM。
+std::string DefaultAudioEndpointId(EDataFlow flow) {
+  std::string id;
+  IMMDeviceEnumerator* enumerator = nullptr;
+  if (FAILED(::CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                reinterpret_cast<void**>(&enumerator))) ||
+      enumerator == nullptr) {
+    return id;
+  }
+  IMMDevice* device = nullptr;
+  if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(flow, eConsole, &device)) &&
+      device != nullptr) {
+    LPWSTR wide = nullptr;
+    if (SUCCEEDED(device->GetId(&wide)) && wide != nullptr) {
+      id = Utf8FromUtf16(wide);
+      ::CoTaskMemFree(wide);
+    }
+    device->Release();
+  }
+  enumerator->Release();
+  return id;
+}
+
+}  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -47,6 +81,13 @@ bool FlutterWindow::OnCreate() {
             ::FlashWindowEx(&info);
           }
           result->Success();
+        } else if (call.method_name() == "defaultAudioDevices") {
+          flutter::EncodableMap devices;
+          devices[flutter::EncodableValue("output")] =
+              flutter::EncodableValue(DefaultAudioEndpointId(eRender));
+          devices[flutter::EncodableValue("input")] =
+              flutter::EncodableValue(DefaultAudioEndpointId(eCapture));
+          result->Success(flutter::EncodableValue(devices));
         } else {
           result->NotImplemented();
         }

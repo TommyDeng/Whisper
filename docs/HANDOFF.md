@@ -31,11 +31,19 @@
 
 音频调查（本机 Ubuntu，2026-11-12 21:55 亚洲/上海）：PipeWire 默认麦克风用 `pw-record` 两秒峰值 648、有效值 154.7，硬件采集正常。独立的 flutter_webrtc 1.6.3 进程内双 `RTCPeerConnection` 环回（不接渲染器、远端 track 关闭以免外放）结果是 `linux-capture=NONZERO`：4 秒内 `bytesSent` 从 928 增到 7263（增量 6335），本端 `audioLevel` 约 0.009–0.011，`totalAudioEnergy` 持续上升。因此 Ubuntu 侧 getUserMedia / 发送在本机是通的，1.0.2 的“Linux 采集没起来”假设不成立。更可能仍是 Windows 远端播放：`SetPlayoutDevice` 默认不会在 getUserMedia 里调用（#2006/#2001），`enumerateDevices` 有时是空的（#2141），`onTrack.streams` 在 Unified Plan 下可能为空。1.0.3 仍补了显式 `sourceId`/`deviceId`、`selectAudioInput` + `selectAudioOutput`（失败时再试 `'default'`）、`ensureAudioSession`、隐藏的本端+远端渲染器、streams 为空时自行建流挂轨，以及通话条上的收发诊断（本端↑字节/电平，远端↓字节/电平）。下次对打时请看这一行：若 Ubuntu 的「本端↑」字节几乎不动，问题在 Ubuntu 发送；若 Ubuntu「本端↑」在涨而 Windows「远端↓」不动或电平一直是 0，问题在 Windows 接收/播放。
 
+分支 `feat/pairing-dialog-autostart`（2026-11-13，未发版、未在真机上验证）：
+
+- Ubuntu→Windows 单向无声：用户确认通话条两边字节都在涨、Windows 有多个输出设备。原因是 Windows 上设备名里没有 default，枚举顺序也和默认设备无关，`pickDefaultPlayoutDeviceId` 退到“第一个输出设备”，声音被送到别的设备。现在 Windows runner 通过 `whisper/desktop` 通道的 `defaultAudioDevices` 报告系统默认播放/录音端点 ID，Dart 按 ID 匹配；匹配不到时不指定设备（不再取第一个）。通话条那行诊断的悬停提示里会显示实际播放设备。Windows 原生代码本机编不了，要靠 CI 和两台电脑对打确认。
+- 托盘图标不闪：最小工程实测（本机 GNOME Wayland）窗口隐藏后定时器照常跑、每拍都发出 `NewIcon`，所以 1.0.4 其实在换图，只是“普通图标 ↔ 带红点图标”差别太小。改成“带红点图标 ↔ 空白图标”，回到前台恢复普通图标。屏幕上的实际效果没看到（Wayland 不让截图）。
+- 添加联系人改成对话框（`showPairingDialog`），入口只留右上角一个按钮，去掉右下角悬浮按钮。不能用 `AlertDialog`：它要算固有宽度，二维码控件不支持。
+- 「关于」里加了开机自动启动开关（`lib/desktop/autostart.dart`）：Linux 写 `~/.config/autostart/whisper.desktop`，Windows 用 `reg` 写当前用户的 `Run` 项；开关状态直接读系统。自启动时窗口正常显示，没有做“启动后藏到托盘”。
+- 本机较新的 libayatana 把 `app_indicator_new` 标成弃用，tray_manager 在 `-Werror` 下编不过（CI 的 ubuntu-latest 不受影响）；加上之前缺 `libgstreamer1.0-dev`，本机仍然构建不了 Linux 包。
+
 早期验证代码已清理（PR #31），可执行文件正式名为 `whisper`。不要由 Agent 部署，也不要建新的云资源。`spike/` 目录不要改。
 
 里程碑 5 的打包与发布流程已在 `main`。打 `v*` 标签即可由 GitHub Actions 构建 Linux（deb / AppImage / tar.gz）和 Windows（未签名安装器 + 便携 zip），生成 `SHA256SUMS` 和 `SHA256SUMS.asc` 并创建 GitHub Release。步骤见 `docs/release.md`。不要由 Agent 打 tag 或创建 Release。
 
-检查基线（2026-11-13）：`flutter analyze --no-fatal-infos lib test` 13 条 info；`flutter test` 423 个全过。`worker/` 若未改则不必重跑。
+检查基线（2026-11-13）：`flutter analyze --no-fatal-infos lib test` 13 条 info；`flutter test` 439 个全过。`worker/` 若未改则不必重跑。
 
 ## 之后的事
 

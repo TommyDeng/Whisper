@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../app_services.dart';
 import '../contact/contact.dart';
+import '../desktop/autostart.dart';
 import '../storage/local_db.dart';
 import '../pairing/pairing_manager.dart';
 import '../pairing/pairing_page.dart';
@@ -182,9 +183,7 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
   }
 
   Future<void> _openPairing() async {
-    await Navigator.of(
-      context,
-    ).push(MaterialPageRoute<void>(builder: (context) => const PairingPage()));
+    await showPairingDialog(context);
     await _loadContacts();
   }
 
@@ -279,16 +278,18 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
         backgroundColor: AppTheme.white,
         actions: [
           IconButton(
+            tooltip: '添加联系人 / 我的邀请码',
+            icon: const Icon(Icons.person_add_outlined, size: 20),
+            onPressed: _openPairing,
+          ),
+          IconButton(
             tooltip: '关于',
             icon: const Icon(Icons.info_outline, size: 20),
-            onPressed: () => unawaited(showAboutWhisperDialog(context)),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8),
-            child: IconButton(
-              tooltip: '添加联系人 / 我的邀请码',
-              icon: const Icon(Icons.qr_code, size: 20),
-              onPressed: _openPairing,
+            onPressed: () => unawaited(
+              showAboutWhisperDialog(
+                context,
+                autostart: Autostart.forPlatform(),
+              ),
             ),
           ),
           PopupMenuButton<String>(
@@ -327,10 +328,6 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
           Expanded(child: _buildList()),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _openPairing,
-        child: const Icon(Icons.person_add, size: 20),
-      ),
     );
   }
 
@@ -353,7 +350,7 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
             ),
             SizedBox(height: 8),
             Text(
-              '通过扫码或邀请码添加亲友',
+              '点右上角的添加按钮，用邀请码添加亲友',
               style: TextStyle(color: AppTheme.midGray, fontSize: 12),
             ),
           ],

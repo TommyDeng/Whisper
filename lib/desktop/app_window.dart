@@ -25,12 +25,16 @@ class AppWindow with WindowListener, TrayListener {
   static String get _alertIcon => Platform.isWindows
       ? 'assets/icons/app_icon_unread.ico'
       : 'assets/icons/whisper_unread.png';
+  static String get _blankIcon => Platform.isWindows
+      ? 'assets/icons/app_icon_blank.ico'
+      : 'assets/icons/whisper_blank.png';
 
   /// 有未看的新消息时让托盘图标闪烁。
   late final _blinker = TrayBlinker(
     setIcon: trayManager.setIcon,
     normalIcon: _normalIcon,
     alertIcon: _alertIcon,
+    blankIcon: _blankIcon,
   );
 
   /// 初始化窗口拦截和托盘。只在 Linux / Windows 上有效。
