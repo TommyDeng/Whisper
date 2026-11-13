@@ -13,12 +13,17 @@ struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
   FlMethodChannel* desktop_channel;
+  // 开机自启动（--hidden）：第一帧出来也不显示窗口，只留托盘图标。
+  gboolean start_hidden;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
+  if (self->start_hidden) {
+    return;
+  }
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
@@ -86,6 +91,18 @@ static void my_application_request_quit(MyApplication* self) {
   g_application_quit(G_APPLICATION(self));
 }
 
+static gboolean my_application_args_want_hidden(gchar** argv) {
+  if (argv == nullptr) {
+    return FALSE;
+  }
+  for (gint i = 0; argv[i] != nullptr; i++) {
+    if (g_strcmp0(argv[i], "--hidden") == 0) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
 static gboolean my_application_args_want_quit(gchar** argv, gint argc) {
   for (gint i = 0; i < argc; i++) {
     if (g_strcmp0(argv[i], "--quit") == 0) {
@@ -121,6 +138,9 @@ static void my_application_activate(GApplication* application) {
     my_application_present_window(GTK_WINDOW(existing->data));
     return;
   }
+
+  self->start_hidden =
+      my_application_args_want_hidden(self->dart_entrypoint_arguments);
 
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));

@@ -55,6 +55,13 @@ Windows 安装包没有购买代码签名证书，SmartScreen 可能提示“Win
 
 以后发新版本：先改 `pubspec.yaml` 的版本并合并到 `main`，再打并推送对应的 `vX.Y.Z` 标签。带连字符的标签（例如 `v1.0.0-rc.1`）会标成 pre-release，同样要求与 pubspec 版本一致。
 
+## 客户端自动更新依赖的约定
+
+客户端「关于」里的更新功能（`lib/update/`）直接读 Release 的产物，下面两样不能随意改：
+
+- 安装包文件名（见上面“产物”表）和 `SHA256SUMS` / `SHA256SUMS.asc`。
+- 签名密钥：客户端内置了发布公钥（`lib/update/pgp_verify.dart` 的 `kReleasePublicKey`），只接受这把钥匙签的 `SHA256SUMS`。轮换密钥时，要先发一个内置新公钥、但仍用旧钥匙签名的版本，否则老客户端会拒绝更新，只能手动下载。
+
 ## 校验安装包
 
 把公钥导入本地（只需一次），再下载 Release 里的安装包、`SHA256SUMS` 和 `SHA256SUMS.asc`：

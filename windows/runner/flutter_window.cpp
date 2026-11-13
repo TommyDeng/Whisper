@@ -94,8 +94,17 @@ bool FlutterWindow::OnCreate() {
       });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
-  flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+  // 开机自启动（--hidden）：不显示窗口，只留托盘图标；用户从托盘点「显示」。
+  bool start_hidden = false;
+  for (const std::string& argument : project_.dart_entrypoint_arguments()) {
+    if (argument == "--hidden") {
+      start_hidden = true;
+    }
+  }
+  flutter_controller_->engine()->SetNextFrameCallback([this, start_hidden]() {
+    if (!start_hidden) {
+      this->Show();
+    }
   });
 
   // Flutter can complete the first frame before the "show window" callback is

@@ -6,6 +6,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'app_cli.dart';
+
 abstract class Autostart {
   /// 当前平台的实现；不支持的平台返回 null。
   static Autostart? forPlatform() {
@@ -29,6 +31,12 @@ abstract class Autostart {
 
   /// 打开或关闭；失败时抛异常。
   Future<void> setEnabled(bool enabled);
+}
+
+/// 已经打开自启动时重写一遍启动项，让旧版本写下的内容（没有 `--hidden`、
+/// 或程序换了位置）跟上当前版本。没打开就什么也不做。
+Future<void> refreshAutostart(Autostart autostart) async {
+  if (await autostart.isEnabled()) await autostart.setEnabled(true);
 }
 
 /// 按 XDG 规范找自启动目录；连 HOME 都没有时返回 null。
@@ -55,7 +63,7 @@ String linuxAutostartEntry(String executable) {
   return '[Desktop Entry]\n'
       'Type=Application\n'
       'Name=耳语 Whisper\n'
-      'Exec=${quoteDesktopExecArg(executable)}\n'
+      'Exec=${quoteDesktopExecArg(executable)} $kHiddenArg\n'
       'Icon=whisper\n'
       'Terminal=false\n'
       'X-GNOME-Autostart-enabled=true\n';
@@ -110,7 +118,7 @@ class WindowsAutostart implements Autostart {
     if (enabled) {
       final result = await _run('reg', [
         'add', runKey, '/v', valueName, '/t', 'REG_SZ', //
-        '/d', '"$executable"', '/f',
+        '/d', '"$executable" $kHiddenArg', '/f',
       ]);
       if (result.exitCode != 0) {
         throw StateError('写入开机启动项失败');
