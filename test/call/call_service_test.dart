@@ -87,6 +87,26 @@ class FakeMedia implements CallMedia {
     await (gate?.future ?? Future<void>.delayed(Duration.zero));
   }
 
+  /// 第几次 ICE 重启。
+  int restarts = 0;
+
+  @override
+  Future<String> restartOffer() async {
+    restarts++;
+    log.add('restartOffer');
+    early.forEach(_candidates.add);
+    await (gate?.future ?? Future<void>.delayed(Duration.zero));
+    return 'restart-offer-$restarts';
+  }
+
+  @override
+  Future<String> acceptRestartOffer(String sdp) async {
+    log.add('acceptRestartOffer:$sdp');
+    early.forEach(_candidates.add);
+    await (gate?.future ?? Future<void>.delayed(Duration.zero));
+    return 'restart-answer';
+  }
+
   @override
   Future<void> addCandidate(CallCandidate candidate) async {
     log.add('addCandidate:${candidate.candidate}');
@@ -151,6 +171,9 @@ void main() {
   CallService newService({
     Duration ringTimeout = const Duration(seconds: 20),
     Duration connectTimeout = const Duration(seconds: 20),
+    Duration reconnectTimeout = const Duration(seconds: 20),
+    Duration reconnectGrace = const Duration(seconds: 20),
+    Duration reconnectRetry = const Duration(seconds: 20),
   }) =>
       CallService(
         transport: transport,
@@ -162,6 +185,9 @@ void main() {
         },
         ringTimeout: ringTimeout,
         connectTimeout: connectTimeout,
+        reconnectTimeout: reconnectTimeout,
+        reconnectGrace: reconnectGrace,
+        reconnectRetry: reconnectRetry,
       );
 
   Future<void> phase(CallPhase expected) =>
@@ -419,20 +445,6 @@ void main() {
       await phase(CallPhase.connecting);
       await phase(CallPhase.ended);
 
-      expect(service.snapshot.endReason, CallEndReason.failed);
-      expect(medias.single.closed, isTrue);
-      expect(transport.ofKind(CallSignal.kindEnd).single.signal.reason, CallSignal.reasonFailed);
-    });
-
-    test('通话中音频连接失败：发 end(failed)，以 failed 结束', () async {
-      final callId = await call();
-      transport.receive(bob, CallSignal.answer(callId, 'remote-answer'));
-      await phase(CallPhase.connecting);
-      medias.single.emitState(CallMediaState.connected);
-      await phase(CallPhase.active);
-
-      medias.single.emitState(CallMediaState.failed);
-      await phase(CallPhase.ended);
       expect(service.snapshot.endReason, CallEndReason.failed);
       expect(medias.single.closed, isTrue);
       expect(transport.ofKind(CallSignal.kindEnd).single.signal.reason, CallSignal.reasonFailed);
@@ -754,6 +766,224 @@ void main() {
       transport.receive(carol, const CallSignal.offer('after', 'x'));
       await _settle();
       expect(transport.sent, hasLength(before));
+    });
+  });
+  test('媒体还在打开时再按一次接听：不会再建一个媒体，answer 只发一次', () async {
+    await ring();
+    final gate = Completer<void>();
+    prepare = (media) => media.gate = gate;
+
+    final first = service.accept();
+    final second = service.accept();
+    await _settle();
+    expect(medias, hasLength(1));
+
+    gate.complete();
+    await Future.wait([first, second]);
+    await phase(CallPhase.connecting);
+    expect(medias, hasLength(1));
+    expect(transport.ofKind(CallSignal.kindAnswer), hasLength(1));
+  });
+
+  group('通话中重连', () {
+    /// 自己打给 Bob 并接通，返回 callId。
+    Future<String> activeOutgoing() async {
+      final callId = await call();
+      transport.receive(bob, CallSignal.answer(callId, 'remote-answer'));
+      await phase(CallPhase.connecting);
+      medias.single.emitState(CallMediaState.connected);
+      await phase(CallPhase.active);
+      return callId;
+    }
+
+    /// Bob 打进来并接通，返回 callId。
+    Future<String> activeIncoming() async {
+      await ring();
+      await service.accept();
+      medias.single.emitState(CallMediaState.connected);
+      await phase(CallPhase.active);
+      return 'in-1';
+    }
+
+    Future<void> reconnecting(bool expected) => _until(
+          () => service.snapshot.reconnecting == expected,
+          what: 'reconnecting == $expected',
+        );
+
+    test('主叫：failed 后立刻 ICE 重启，应用 reanswer，重新连上后通话继续', () async {
+      final callId = await activeOutgoing();
+      final connectedAt = service.snapshot.connectedAt;
+      final media = medias.single;
+
+      media.emitState(CallMediaState.failed);
+      await reconnecting(true);
+      await _until(() => transport.ofKind(CallSignal.kindReoffer).isNotEmpty, what: '发出 reoffer');
+      final reoffer = transport.ofKind(CallSignal.kindReoffer).single.signal;
+      expect(reoffer.sdp, 'restart-offer-1');
+      expect(reoffer.seq, 1);
+      expect(service.snapshot.phase, CallPhase.active);
+
+      transport.receive(bob, CallSignal.reanswer(callId, 'restart-answer', 1));
+      await _until(() => media.log.contains('acceptAnswer:restart-answer'), what: '应用 reanswer');
+
+      media.emitState(CallMediaState.connected);
+      await reconnecting(false);
+      expect(service.snapshot.phase, CallPhase.active);
+      expect(service.snapshot.connectedAt, connectedAt);
+      expect(media.closed, isFalse);
+      expect(transport.ofKind(CallSignal.kindEnd), isEmpty);
+    });
+
+    test('disconnected 在宽限期内自己恢复：不做 ICE 重启', () async {
+      service = newService(reconnectGrace: const Duration(milliseconds: 150));
+      await activeOutgoing();
+      final media = medias.single;
+
+      media.emitState(CallMediaState.disconnected);
+      await reconnecting(true);
+      media.emitState(CallMediaState.connected);
+      await reconnecting(false);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+
+      expect(media.log, isNot(contains('restartOffer')));
+      expect(transport.ofKind(CallSignal.kindReoffer), isEmpty);
+      expect(service.snapshot.phase, CallPhase.active);
+    });
+
+    test('disconnected 过了宽限期还没恢复：开始重启，并按间隔重试，seq 递增', () async {
+      service = newService(
+        reconnectGrace: const Duration(milliseconds: 30),
+        reconnectRetry: const Duration(milliseconds: 60),
+      );
+      await activeOutgoing();
+
+      medias.single.emitState(CallMediaState.disconnected);
+      await _until(() => transport.ofKind(CallSignal.kindReoffer).length >= 2, what: '第二次 reoffer');
+      final seqs = [for (final item in transport.ofKind(CallSignal.kindReoffer)) item.signal.seq];
+      expect(seqs.take(2), [1, 2]);
+    });
+
+    test('重连超时：发 end(failed)，以 failed 结束', () async {
+      service = newService(reconnectTimeout: const Duration(milliseconds: 80));
+      await activeOutgoing();
+
+      medias.single.emitState(CallMediaState.failed);
+      await phase(CallPhase.ended);
+      expect(service.snapshot.endReason, CallEndReason.failed);
+      expect(medias.single.closed, isTrue);
+      expect(transport.ofKind(CallSignal.kindEnd).single.signal.reason, CallSignal.reasonFailed);
+    });
+
+    test('过期的 reanswer（seq 对不上）被忽略', () async {
+      final callId = await activeOutgoing();
+      final media = medias.single;
+      media.emitState(CallMediaState.failed);
+      await _until(() => transport.ofKind(CallSignal.kindReoffer).isNotEmpty, what: '发出 reoffer');
+
+      transport.receive(bob, CallSignal.reanswer(callId, 'stale-answer', 7));
+      await _settle();
+      expect(media.log, isNot(contains('acceptAnswer:stale-answer')));
+    });
+
+    test('主叫：收到被叫的 restart 请求就发 reoffer，自己媒体正常时不进入重连', () async {
+      final callId = await activeOutgoing();
+      transport.receive(bob, CallSignal.restart(callId));
+      await _until(() => transport.ofKind(CallSignal.kindReoffer).isNotEmpty, what: '发出 reoffer');
+      expect(service.snapshot.reconnecting, isFalse);
+    });
+
+    test('主叫：reanswer 应用之前到的对方候选先存着', () async {
+      final callId = await activeOutgoing();
+      final media = medias.single;
+      media.emitState(CallMediaState.failed);
+      await _until(() => transport.ofKind(CallSignal.kindReoffer).isNotEmpty, what: '发出 reoffer');
+
+      media.gate = Completer<void>();
+      transport.receive(bob, CallSignal.reanswer(callId, 'restart-answer', 1));
+      transport.receive(bob, CallSignal.candidate(callId, const CallCandidate('new-cand')));
+      await _settle();
+      expect(media.log, isNot(contains('addCandidate:new-cand')));
+
+      media.gate!.complete();
+      await _until(() => media.log.contains('addCandidate:new-cand'), what: '候选加入');
+      expect(
+        media.log.indexOf('acceptAnswer:restart-answer'),
+        lessThan(media.log.indexOf('addCandidate:new-cand')),
+      );
+    });
+
+    test('主叫：reoffer 发出之前产生的本端候选排在 reoffer 之后发', () async {
+      await activeOutgoing();
+      final media = medias.single;
+      media.early = const [CallCandidate('fresh-local')];
+      final before = transport.sent.length;
+
+      media.emitState(CallMediaState.failed);
+      await _until(
+        () => transport.sent.skip(before).any((item) => item.signal.kind == CallSignal.kindCandidate),
+        what: '重启后的本端候选',
+      );
+      final kinds = [for (final item in transport.sent.skip(before)) item.signal.kind];
+      expect(kinds.indexOf(CallSignal.kindReoffer), lessThan(kinds.indexOf(CallSignal.kindCandidate)));
+    });
+
+    test('被叫：failed 后请主叫重启；收到 reoffer 后应答并带回 seq', () async {
+      final callId = await activeIncoming();
+      final media = medias.single;
+
+      media.emitState(CallMediaState.failed);
+      await reconnecting(true);
+      await _until(() => transport.ofKind(CallSignal.kindRestart).isNotEmpty, what: '发出 restart');
+      expect(media.log, isNot(contains('restartOffer')));
+
+      media.gate = Completer<void>();
+      transport.receive(bob, CallSignal.reoffer(callId, 'restart-offer', 3));
+      transport.receive(bob, CallSignal.candidate(callId, const CallCandidate('new-cand')));
+      await _settle();
+      expect(media.log, contains('acceptRestartOffer:restart-offer'));
+      expect(media.log, isNot(contains('addCandidate:new-cand')));
+
+      media.gate!.complete();
+      await _until(() => transport.ofKind(CallSignal.kindReanswer).isNotEmpty, what: '发出 reanswer');
+      final reanswer = transport.ofKind(CallSignal.kindReanswer).single.signal;
+      expect(reanswer.sdp, 'restart-answer');
+      expect(reanswer.seq, 3);
+      await _until(() => media.log.contains('addCandidate:new-cand'), what: '候选加入');
+
+      media.emitState(CallMediaState.connected);
+      await reconnecting(false);
+      expect(service.snapshot.phase, CallPhase.active);
+    });
+
+    test('被叫不发 reoffer；主叫不理会 reoffer', () async {
+      final callId = await activeOutgoing();
+      transport.receive(bob, CallSignal.reoffer(callId, 'x', 1));
+      await _settle();
+      expect(medias.single.log, isNot(contains('acceptRestartOffer:x')));
+      expect(transport.ofKind(CallSignal.kindReanswer), isEmpty);
+    });
+
+    test('重连期间挂断：正常结束，不再重试', () async {
+      service = newService(reconnectRetry: const Duration(milliseconds: 40));
+      await activeOutgoing();
+      medias.single.emitState(CallMediaState.failed);
+      await reconnecting(true);
+
+      await service.hangup();
+      expect(service.snapshot.endReason, CallEndReason.hangup);
+      final sent = transport.sent.length;
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      expect(transport.sent.length, sent);
+    });
+
+    test('重连时静音状态保留', () async {
+      await activeOutgoing();
+      service.setMuted(true);
+      medias.single.emitState(CallMediaState.failed);
+      await reconnecting(true);
+      expect(service.snapshot.muted, isTrue);
+      service.setMuted(false);
+      expect(service.snapshot.reconnecting, isTrue);
     });
   });
 }

@@ -1,4 +1,4 @@
-/// 从系统剪贴板取出图片，写成文件，再走现有的发文件路径。
+/// 从系统剪贴板取出图片，写成文件，再走现有的发文件路径；以及把聊天里的图片放进剪贴板。
 library;
 
 import 'dart:async';
@@ -79,4 +79,20 @@ Future<Uint8List?> _readFile(ClipboardReader reader, FileFormat format) {
   );
   if (progress == null) return Future<Uint8List?>.value(null);
   return done.future;
+}
+
+/// 把 [path] 这张图片以 PNG 放进系统剪贴板。
+/// 文件读不了、解码失败或平台没有剪贴板时返回 false。
+Future<bool> copyImageFileToClipboard(String path) async {
+  try {
+    final clipboard = SystemClipboard.instance;
+    if (clipboard == null) return false;
+    final png = await imageBytesAsPng(await File(path).readAsBytes());
+    final item = DataWriterItem(suggestedName: 'image.png');
+    item.add(Formats.png(png));
+    await clipboard.write([item]);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }

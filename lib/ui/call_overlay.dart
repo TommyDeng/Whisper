@@ -419,6 +419,7 @@ String callStatusText(CallSnapshot snapshot, DateTime now) {
     case CallPhase.connecting:
       return '正在接通…';
     case CallPhase.active:
+      if (snapshot.reconnecting) return '正在重新连接…';
       final started = snapshot.connectedAt;
       return started == null
           ? '通话中'

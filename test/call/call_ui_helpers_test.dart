@@ -17,6 +17,10 @@ void main() {
     expect(callStatusText(const CallSnapshot(phase: CallPhase.outgoing), now), '正在呼叫…');
     expect(callStatusText(const CallSnapshot(phase: CallPhase.outgoing, remoteRinging: true), now), '对方响铃中…');
     expect(
+      callStatusText(const CallSnapshot(phase: CallPhase.active, reconnecting: true), now),
+      '正在重新连接…',
+    );
+    expect(
       callStatusText(
         CallSnapshot(phase: CallPhase.active, connectedAt: now.subtract(const Duration(seconds: 61))),
         now,

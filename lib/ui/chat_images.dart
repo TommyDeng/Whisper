@@ -2,6 +2,8 @@
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -17,27 +19,125 @@ String clipboardImageExtension(String format) {
   return 'png';
 }
 
-/// 点击缩略图后放大查看；再点一次关闭。
-void showChatImagePreview(BuildContext context, String path) {
+/// [bytes] 是否以 PNG 文件头开始。
+bool isPngBytes(List<int> bytes) {
+  const signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+  if (bytes.length < signature.length) return false;
+  for (var i = 0; i < signature.length; i++) {
+    if (bytes[i] != signature[i]) return false;
+  }
+  return true;
+}
+
+/// 把一张图片转成 PNG：已经是 PNG 的原样返回，其它格式解码后重新编码（动图只取第一帧）。
+/// 解码不了时抛异常。
+Future<Uint8List> imageBytesAsPng(Uint8List bytes) async {
+  if (isPngBytes(bytes)) return bytes;
+  final codec = await ui.instantiateImageCodec(bytes);
+  try {
+    final frame = await codec.getNextFrame();
+    try {
+      final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) throw const FormatException('无法编码为 PNG');
+      return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    } finally {
+      frame.image.dispose();
+    }
+  } finally {
+    codec.dispose();
+  }
+}
+
+/// 图片右键菜单和大图下方按钮的文字。
+const String kCopyImageLabel = '复制图片';
+const String kSaveImageLabel = '另存为…';
+
+/// 在 [position]（全局坐标）弹出图片的右键菜单。
+Future<void> showChatImageMenu(
+  BuildContext context,
+  Offset position, {
+  VoidCallback? onCopy,
+  VoidCallback? onSave,
+}) async {
+  if (onCopy == null && onSave == null) return;
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  final chosen = await showMenu<VoidCallback>(
+    context: context,
+    position: RelativeRect.fromRect(
+      position & Size.zero,
+      Offset.zero & overlay.size,
+    ),
+    items: [
+      if (onCopy != null)
+        PopupMenuItem(value: onCopy, child: const Text(kCopyImageLabel)),
+      if (onSave != null)
+        PopupMenuItem(value: onSave, child: const Text(kSaveImageLabel)),
+    ],
+  );
+  chosen?.call();
+}
+
+/// 点击缩略图后放大查看；点图片关闭。图片下方可以复制或另存。
+void showChatImagePreview(
+  BuildContext context,
+  String path, {
+  VoidCallback? onCopy,
+  VoidCallback? onSave,
+}) {
   showDialog<void>(
     context: context,
     builder: (context) => Dialog(
       insetPadding: const EdgeInsets.all(24),
-      child: GestureDetector(
-        onTap: () => Navigator.of(context).pop(),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 640),
-          child: InteractiveViewer(
-            child: Image.file(
-              File(path),
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stack) => const Padding(
-                padding: EdgeInsets.all(24),
-                child: Text('无法打开这张图片'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              onSecondaryTapUp: (details) => showChatImageMenu(
+                context,
+                details.globalPosition,
+                onCopy: onCopy,
+                onSave: onSave,
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: 720,
+                  maxHeight: 640,
+                ),
+                child: InteractiveViewer(
+                  child: Image.file(
+                    File(path),
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stack) => const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('无法打开这张图片'),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
-        ),
+          if (onCopy != null || onSave != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (onCopy != null)
+                    TextButton(
+                      onPressed: onCopy,
+                      child: const Text(kCopyImageLabel),
+                    ),
+                  if (onSave != null)
+                    TextButton(
+                      onPressed: onSave,
+                      child: const Text(kSaveImageLabel),
+                    ),
+                ],
+              ),
+            ),
+        ],
       ),
     ),
   );
