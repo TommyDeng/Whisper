@@ -12,6 +12,7 @@ import '../app_services.dart';
 import '../contact/contact.dart';
 import '../desktop/autostart.dart';
 import '../storage/local_db.dart';
+import '../update/app_update.dart';
 import '../pairing/pairing_manager.dart';
 import '../pairing/pairing_page.dart';
 import 'about.dart';
@@ -289,6 +290,8 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
               showAboutWhisperDialog(
                 context,
                 autostart: Autostart.forPlatform(),
+                updater: GithubAppUpdater.forPlatform(),
+                onQuitForUpdate: _services.window.quit,
               ),
             ),
           ),

@@ -1,4 +1,4 @@
-# 交接说明（2026-11-13，1.0.5）
+# 交接说明（2026-11-13，1.0.6）
 
 给接手的 Agent。先读根目录的 `CLAUDE.md`（工作方式和检查命令），再读这份。
 
@@ -39,11 +39,19 @@
 - 「关于」里加了开机自动启动开关（`lib/desktop/autostart.dart`）：Linux 写 `~/.config/autostart/whisper.desktop`，Windows 用 `reg` 写当前用户的 `Run` 项；开关状态直接读系统。自启动时窗口正常显示，没有做“启动后藏到托盘”。
 - 本机较新的 libayatana 把 `app_indicator_new` 标成弃用，tray_manager 在 `-Werror` 下编不过（CI 的 ubuntu-latest 不受影响）；加上之前缺 `libgstreamer1.0-dev`，本机仍然构建不了 Linux 包。
 
+1.0.6（`1.0.6+8`，2026-11-13，PR #43）：
+
+- 1.0.5 实测：两边通话都有声音了（Windows 按系统默认设备播放的修复有效）；Linux 托盘闪烁正常。
+- Windows 托盘仍不闪的原因：`FlashWindowEx` 闪任务栏时会给窗口发 `WM_NCACTIVATE`，window_manager 把它报成 focus 事件，`onWindowFocus` 就把闪烁停了，还把窗口记成在前台。现在 Windows 上收到 focus / blur 先用 `refreshFocus()` 问真实状态。空白 ico 也改成和未读图标一样的 BMP 格式。没有 Windows 机器，未实测。
+- 通话条：播放设备直接显示成一行，去掉悬停提示（在 Linux 上悬停提示画成一大块灰色）。
+- 开机自启动带 `--hidden`：两个 runner 看到它就不在第一帧显示窗口，只留托盘。Linux 用最小工程实测过（Dart 照常启动、`isVisible` 为 false、之后 `show()` 正常）。启动时会把旧版本写的启动项重写一遍（`refreshAutostart`）。
+- 自动更新（`lib/update/`）：「关于」打开时请求 `releases/latest` 的跳转地址得到最新版本号；有新版本时显示「更新客户端」。下载前先用内置的发布公钥（`kReleasePublicKey`）校验 `SHA256SUMS.asc`，再核对安装包哈希，任何一步不过都不安装。Windows 安装器版：脱离进程的批处理静默跑安装器再启动；deb：`pkexec apt-get install`；AppImage：替换 `$APPIMAGE`；便携包只给下载链接。对真实的 v1.0.5 Release 跑通过“查版本、下载、验签、验哈希”，安装和重启这一步没有实测。**换发布密钥或改安装包文件名时要同步改 `lib/update/`**，否则老客户端会拒绝更新。
+
 早期验证代码已清理（PR #31），可执行文件正式名为 `whisper`。不要由 Agent 部署，也不要建新的云资源。`spike/` 目录不要改。
 
 里程碑 5 的打包与发布流程已在 `main`。打 `v*` 标签即可由 GitHub Actions 构建 Linux（deb / AppImage / tar.gz）和 Windows（未签名安装器 + 便携 zip），生成 `SHA256SUMS` 和 `SHA256SUMS.asc` 并创建 GitHub Release。步骤见 `docs/release.md`。不要由 Agent 打 tag 或创建 Release。
 
-检查基线（2026-11-13）：`flutter analyze --no-fatal-infos lib test` 13 条 info；`flutter test` 439 个全过。`worker/` 若未改则不必重跑。
+检查基线（2026-11-13）：`flutter analyze --no-fatal-infos lib test` 13 条 info；`flutter test` 466 个全过。`worker/` 若未改则不必重跑。
 
 ## 之后的事
 

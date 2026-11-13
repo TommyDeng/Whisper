@@ -33,7 +33,7 @@ void main() {
       final text = linuxAutostartEntry('/opt/whisper/whisper');
       expect(text, startsWith('[Desktop Entry]\n'));
       expect(text, contains('Type=Application\n'));
-      expect(text, contains('Exec="/opt/whisper/whisper"\n'));
+      expect(text, contains('Exec="/opt/whisper/whisper" --hidden\n'));
     });
   });
 
@@ -58,11 +58,39 @@ void main() {
       await autostart.setEnabled(true);
       await autostart.setEnabled(true);
       expect(await autostart.isEnabled(), isTrue);
-      expect(file.readAsStringSync(), contains('Exec="/opt/whisper/whisper"'));
+      expect(
+        file.readAsStringSync(),
+        contains('Exec="/opt/whisper/whisper" --hidden'),
+      );
 
       await autostart.setEnabled(false);
       expect(await autostart.isEnabled(), isFalse);
       expect(file.existsSync(), isFalse);
+    });
+  });
+
+  group('refreshAutostart', () {
+    late Directory temp;
+
+    setUp(() => temp = Directory.systemTemp.createTempSync('autostart_test'));
+    tearDown(() => temp.deleteSync(recursive: true));
+
+    test('已打开时把旧内容重写成当前格式，没打开时不创建', () async {
+      final autostart = LinuxAutostart(
+        directory: temp.path,
+        executable: '/opt/whisper/whisper',
+      );
+      final file = File(p.join(temp.path, 'whisper.desktop'));
+
+      await refreshAutostart(autostart);
+      expect(file.existsSync(), isFalse);
+
+      file.writeAsStringSync('[Desktop Entry]\nExec="/old/whisper"\n');
+      await refreshAutostart(autostart);
+      expect(
+        file.readAsStringSync(),
+        contains('Exec="/opt/whisper/whisper" --hidden'),
+      );
     });
   });
 
@@ -92,7 +120,10 @@ void main() {
       await autostart.setEnabled(true);
       expect(calls.last, [
         'reg', 'add', WindowsAutostart.runKey, '/v', 'Whisper', '/t', //
-        'REG_SZ', '/d', r'"C:\Program Files\Whisper\whisper.exe"', '/f',
+        'REG_SZ',
+        '/d',
+        r'"C:\Program Files\Whisper\whisper.exe" --hidden',
+        '/f',
       ]);
       expect(await autostart.isEnabled(), isTrue);
 

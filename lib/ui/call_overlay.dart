@@ -272,18 +272,24 @@ class CallBar extends StatelessWidget {
                         snapshot.phase == CallPhase.connecting ||
                         snapshot.phase == CallPhase.outgoing) ...[
                       const SizedBox(height: 2),
-                      Tooltip(
-                        message:
-                            '本端↑是麦克风发出去的电平和字节，远端↓是收到对方的。用来判断是哪一侧没有声音。\n'
-                            '播放设备：${audioStats.playoutDevice ?? '未知'}',
-                        child: Text(
-                          audioStats.compactLabel,
+                      Text(
+                        audioStats.compactLabel,
+                        style: const TextStyle(
+                          color: AppTheme.midGray,
+                          fontSize: 11,
+                        ),
+                      ),
+                      if (audioStats.playoutDevice != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          '播放设备：${audioStats.playoutDevice}',
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: AppTheme.midGray,
                             fontSize: 11,
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ],
                 ),

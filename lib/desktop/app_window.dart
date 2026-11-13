@@ -148,13 +148,30 @@ class AppWindow with WindowListener, TrayListener {
 
   @override
   void onWindowFocus() {
+    if (Platform.isWindows) {
+      // Windows 上这个事件来自 WM_NCACTIVATE，而闪任务栏（FlashWindowEx）自己就会
+      // 发这条消息。1.0.5 把它当成真的回到前台，红点刚出来闪烁就被停掉了。
+      // 所以要问一次窗口是不是真的在前台。
+      unawaited(_stopBlinkIfReallyFocused());
+      return;
+    }
     _blinker.stop();
     focus.windowFocused = true;
     focus.windowHidden = false;
   }
 
+  Future<void> _stopBlinkIfReallyFocused() async {
+    await refreshFocus();
+    if (focus.windowFocused) _blinker.stop();
+  }
+
   @override
   void onWindowBlur() {
+    if (Platform.isWindows) {
+      // 同上：闪任务栏时也会收到假的失焦。
+      unawaited(refreshFocus());
+      return;
+    }
     focus.windowFocused = false;
   }
 

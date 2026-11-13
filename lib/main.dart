@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'app_services.dart';
+import 'desktop/autostart.dart';
 import 'ui/main_app.dart';
 
 Future<void> main() async {
@@ -14,6 +15,11 @@ Future<void> main() async {
   // 关到托盘和托盘菜单；失败不应让应用起不来。
   await AppServices.instance.window.init().catchError((Object _) {});
   runApp(const WhisperApp());
+  // 旧版本写下的开机启动项没有 --hidden，这里顺手更新。
+  final autostart = Autostart.forPlatform();
+  if (autostart != null) {
+    unawaited(refreshAutostart(autostart).catchError((Object _) {}));
+  }
   // 连接中继放在界面起来之后；失败（例如密钥存储不可用）不应让应用起不来，
   // 各连接自己会重连。
   unawaited(AppServices.instance.start().catchError((Object _) {}));

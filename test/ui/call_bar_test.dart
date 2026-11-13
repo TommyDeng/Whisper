@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:whisper/call/call_audio.dart';
 import 'package:whisper/call/call_service.dart';
 import 'package:whisper/contact/contact.dart';
 import 'package:whisper/ui/app_theme.dart';
@@ -84,5 +85,35 @@ void main() {
     expect(find.text('拒接'), findsOneWidget);
     await tester.enterText(find.byKey(inputKey), 'hi');
     expect(find.text('hi'), findsOneWidget);
+  });
+
+  testWidgets('播放设备直接写在通话条上，不用悬停', (tester) async {
+    Widget bar(CallAudioStats stats) => MaterialApp(
+      theme: AppTheme.light,
+      home: Scaffold(
+        body: CallBar(
+          snapshot: CallSnapshot(
+            phase: CallPhase.active,
+            contact: _contact(),
+            muted: false,
+            connectedAt: DateTime(2026, 1, 1, 12),
+          ),
+          path: IcePathType.lan,
+          micLevel: 0,
+          audioStats: stats,
+          now: DateTime(2026, 1, 1, 12, 0, 30),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      bar(const CallAudioStats(playoutDevice: '扬声器 (Realtek(R) Audio)')),
+    );
+    expect(find.text('播放设备：扬声器 (Realtek(R) Audio)'), findsOneWidget);
+    expect(find.byType(Tooltip), findsNothing);
+
+    // 还没选定设备时不显示这一行
+    await tester.pumpWidget(bar(const CallAudioStats()));
+    expect(find.textContaining('播放设备'), findsNothing);
   });
 }
