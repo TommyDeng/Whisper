@@ -6,7 +6,7 @@ Icon=whisper
 Terminal=false
 Type=Application
 Categories=Network;InstantMessaging;
-StartupWMClass=whisper
+StartupWMClass=org.tommydeng.whisper
 SingleMainWindow=true
 Actions=Show;Quit;
 

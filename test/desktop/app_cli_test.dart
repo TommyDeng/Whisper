@@ -26,5 +26,24 @@ void main() {
       expect(text, contains('Exec=whisper --quit'));
       expect(text, contains('Exec=whisper --show'));
     });
+
+    test('安装包只装一个启动器，名字和窗口标识都等于 application-id', () {
+      final cmake = File('linux/CMakeLists.txt').readAsStringSync();
+      final appId = RegExp(r'set\(APPLICATION_ID "([^"]+)"\)')
+          .firstMatch(cmake)!
+          .group(1)!;
+      final desktop = File('packaging/linux/whisper.desktop').readAsStringSync();
+      expect(desktop, contains('StartupWMClass=$appId\n'));
+
+      for (final script in const ['build-deb.sh', 'build-appimage.sh']) {
+        final text = File('packaging/linux/$script').readAsStringSync();
+        final installed = RegExp(r'/usr/share/applications/([^"\s]+\.desktop)"\s*$',
+                multiLine: true)
+            .allMatches(text)
+            .map((m) => m.group(1))
+            .toList();
+        expect(installed, ['$appId.desktop'], reason: script);
+      }
+    });
   });
 }
