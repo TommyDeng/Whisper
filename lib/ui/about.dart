@@ -43,17 +43,27 @@ Future<void> showAboutWhisperDialog(
     versionText = '无法读取版本';
   }
   if (!context.mounted) return;
-  await showDialog<void>(
+  await showTermDialog<void>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('关于耳语'),
+    builder: (context) => TermDialog(
+      title: '关于耳语',
+      tag: 'ABOUT_',
+      width: 400,
       content: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            '版本 $versionText',
-            style: const TextStyle(color: AppTheme.black, fontSize: 14),
+          Text.rich(
+            TextSpan(
+              text: '版本 ',
+              children: [
+                TextSpan(
+                  text: versionText,
+                  style: AppTheme.mono(color: AppTheme.accent, size: 14),
+                ),
+              ],
+            ),
+            style: const TextStyle(color: AppTheme.text, fontSize: 14),
           ),
           if (updater != null && currentVersion != null)
             UpdateSection(
@@ -61,47 +71,60 @@ Future<void> showAboutWhisperDialog(
               currentVersion: currentVersion,
               onQuit: onQuitForUpdate ?? () async {},
             ),
-          const SizedBox(height: 12),
+          if (autostart != null) ...[
+            const SizedBox(height: 14),
+            const Divider(),
+            AutostartSwitch(autostart: autostart),
+          ],
+          const SizedBox(height: 14),
+          const Divider(),
+          const SizedBox(height: 14),
           const Text(
             '客户端下载',
-            style: TextStyle(color: AppTheme.darkGray, fontSize: 12),
+            style: TextStyle(color: AppTheme.text2, fontSize: 12),
           ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: InkWell(
-                  onTap: () => unawaitedLaunch(Uri.parse(kClientDownloadUrl)),
-                  child: const Text(
-                    kClientDownloadUrl,
-                    style: TextStyle(
-                      color: AppTheme.black,
-                      fontSize: 13,
-                      decoration: TextDecoration.underline,
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.only(left: 12, right: 2),
+            decoration: BoxDecoration(
+              color: AppTheme.field,
+              borderRadius: AppTheme.corners,
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () => unawaitedLaunch(Uri.parse(kClientDownloadUrl)),
+                    child: Text(
+                      kClientDownloadUrl,
+                      style: AppTheme.mono(color: AppTheme.text, size: 12.5),
                     ),
                   ),
                 ),
-              ),
-              IconButton(
-                tooltip: '复制链接',
-                icon: const Icon(Icons.copy, size: 18),
-                onPressed: () async {
-                  await Clipboard.setData(
-                    const ClipboardData(text: kClientDownloadUrl),
-                  );
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(const SnackBar(content: Text('已复制下载地址')));
-                  }
-                },
-              ),
-            ],
+                TermIconButton(
+                  tooltip: '复制链接',
+                  icon: Icons.copy,
+                  iconSize: 16,
+                  color: AppTheme.accent,
+                  onPressed: () async {
+                    await Clipboard.setData(
+                      const ClipboardData(text: kClientDownloadUrl),
+                    );
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(const SnackBar(content: Text('已复制下载地址')));
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
-          if (autostart != null) AutostartSwitch(autostart: autostart),
         ],
       ),
       actions: [
-        FilledButton(
+        TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('关闭'),
         ),
@@ -167,10 +190,12 @@ class _UpdateSectionState extends State<UpdateSection> {
       unawaitedLaunch(Uri.parse('$kReleasesUrl/tag/v$latest'));
       return;
     }
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTermDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('更新到 $latest？'),
+      builder: (context) => TermDialog(
+        title: '更新到 $latest？',
+        tag: 'CONFIRM_',
+        width: 400,
         content: Text(
           widget.updater.kind == InstallKind.linuxDeb
               ? '会下载并安装新版本，安装时系统会问一次管理员密码。装好后耳语会自动重启，正在进行的通话会断开。'
@@ -233,7 +258,7 @@ class _UpdateSectionState extends State<UpdateSection> {
 
   @override
   Widget build(BuildContext context) {
-    const hint = TextStyle(color: AppTheme.darkGray, fontSize: 12);
+    const hint = TextStyle(color: AppTheme.text2, fontSize: 12);
     final Widget child;
     switch (_phase) {
       case _UpdatePhase.checking:
@@ -254,7 +279,7 @@ class _UpdateSectionState extends State<UpdateSection> {
                 Expanded(
                   child: Text(
                     '有新版本 $_latest',
-                    style: const TextStyle(color: AppTheme.black, fontSize: 13),
+                    style: const TextStyle(color: AppTheme.amber, fontSize: 13),
                   ),
                 ),
                 FilledButton(
@@ -264,7 +289,11 @@ class _UpdateSectionState extends State<UpdateSection> {
               ],
             ),
             if (_manual) const Text('这份客户端不是用安装包装的，需要手动下载新版本。', style: hint),
-            if (_error != null) Text(_error!, style: hint),
+            if (_error != null)
+              Text(
+                _error!,
+                style: const TextStyle(color: AppTheme.alert, fontSize: 12),
+              ),
           ],
         );
     }
@@ -342,20 +371,17 @@ class _AutostartSwitchState extends State<AutostartSwitch> {
               children: [
                 const Text(
                   '开机自动启动',
-                  style: TextStyle(color: AppTheme.black, fontSize: 14),
+                  style: TextStyle(color: AppTheme.text, fontSize: 14),
                 ),
                 if (_error != null)
                   Text(
                     _error!,
-                    style: const TextStyle(
-                      color: AppTheme.darkGray,
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: AppTheme.alert, fontSize: 12),
                   ),
               ],
             ),
           ),
-          Switch(
+          TermSwitch(
             value: enabled ?? false,
             onChanged: enabled == null || _busy
                 ? null

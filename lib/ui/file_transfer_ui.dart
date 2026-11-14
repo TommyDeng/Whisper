@@ -105,10 +105,12 @@ Future<void> revealFileInFolder(String path) async {
 
 /// 目标已存在时询问是否覆盖。用户取消或关掉对话框返回 false。
 Future<bool> confirmOverwrite(BuildContext context, String name) async {
-  final result = await showDialog<bool>(
+  final result = await showTermDialog<bool>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('文件已存在'),
+    builder: (context) => TermDialog(
+      title: '文件已存在',
+      tag: 'CONFIRM_',
+      width: 400,
       content: Text('“$name”已经存在，要覆盖吗？'),
       actions: [
         TextButton(
@@ -152,10 +154,12 @@ Future<bool> confirmRelaySend(
   required String reason,
   required int size,
 }) async {
-  final result = await showDialog<bool>(
+  final result = await showTermDialog<bool>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: const Text(kRelayConfirmTitle),
+    builder: (context) => TermDialog(
+      title: kRelayConfirmTitle,
+      tag: 'CONFIRM_',
+      width: 400,
       content: Text(relayConfirmBody(reason: reason, size: size)),
       actions: [
         TextButton(
@@ -178,10 +182,12 @@ Future<void> showRelayUnavailable(
   required String reason,
   required int size,
 }) {
-  return showDialog<void>(
+  return showTermDialog<void>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: const Text(kRelayUnavailableTitle),
+    builder: (context) => TermDialog(
+      title: kRelayUnavailableTitle,
+      tag: 'CONFIRM_',
+      width: 400,
       content: Text(relayUnavailableBody(reason: reason, size: size)),
       actions: [
         FilledButton(
@@ -216,15 +222,17 @@ class FileUploadTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final failed = error != null;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: AppTheme.white,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: failed ? AppTheme.red : AppTheme.lightGray),
+          color: failed ? AppTheme.alertSoft : AppTheme.field,
+          borderRadius: AppTheme.corners,
+          border: Border.all(
+            color: failed ? AppTheme.alertBorder : AppTheme.border,
+          ),
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+          padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -233,7 +241,7 @@ class FileUploadTile extends StatelessWidget {
                   Icon(
                     failed ? Icons.error_outline : Icons.upload_outlined,
                     size: 16,
-                    color: failed ? AppTheme.red : AppTheme.darkGray,
+                    color: failed ? AppTheme.alert : AppTheme.accent,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -241,14 +249,14 @@ class FileUploadTile extends StatelessWidget {
                       failed ? '发送失败：$name' : '正在发送 $name',
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: failed ? AppTheme.red : AppTheme.black,
+                        color: failed ? AppTheme.alert : AppTheme.text,
                         fontSize: 13,
                       ),
                     ),
                   ),
                   TextButton(
                     onPressed: onCancel,
-                    style: _compactButton(AppTheme.black),
+                    style: _compact(AppTheme.plainButton),
                     child: Text(failed ? '关闭' : '取消'),
                   ),
                 ],
@@ -258,7 +266,7 @@ class FileUploadTile extends StatelessWidget {
                   padding: const EdgeInsets.only(right: 8, bottom: 4),
                   child: Text(
                     fileTransferErrorText(error),
-                    style: const TextStyle(color: AppTheme.red, fontSize: 12),
+                    style: const TextStyle(color: AppTheme.alert, fontSize: 12),
                   ),
                 )
               else ...[
@@ -267,7 +275,7 @@ class FileUploadTile extends StatelessWidget {
                     padding: EdgeInsets.only(right: 8, bottom: 4),
                     child: Text(
                       kDirectTransferNotice,
-                      style: TextStyle(color: AppTheme.darkGray, fontSize: 11),
+                      style: TextStyle(color: AppTheme.text2, fontSize: 11.5),
                     ),
                   ),
                 Padding(
@@ -275,7 +283,7 @@ class FileUploadTile extends StatelessWidget {
                   child: _ProgressLine(
                     done: done,
                     total: total,
-                    color: AppTheme.black,
+                    color: AppTheme.accent,
                   ),
                 ),
               ],
@@ -307,6 +315,7 @@ class FileMessageBody extends StatelessWidget {
     this.onReveal,
     this.onCopyImage,
     this.onSaveImage,
+    this.onOpen,
   });
 
   final String name;
@@ -328,10 +337,13 @@ class FileMessageBody extends StatelessWidget {
   final VoidCallback? onCopyImage;
   final VoidCallback? onSaveImage;
 
+  /// 用系统程序打开已在本机的文件（视频点开就是播放）。
+  final VoidCallback? onOpen;
+
   @override
   Widget build(BuildContext context) {
-    final fg = isSent ? AppTheme.white : AppTheme.black;
-    final muted = isSent ? AppTheme.lightGray : AppTheme.darkGray;
+    final fg = isSent ? AppTheme.sentText : AppTheme.text;
+    const muted = AppTheme.text2;
     final failed = downloadError != null;
     final downloading =
         !failed && downloadTotal != null && onCancelDownload != null;
@@ -355,7 +367,7 @@ class FileMessageBody extends StatelessWidget {
           onSave: onSaveImage,
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: AppTheme.corners,
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 280, maxHeight: 320),
             child: Image.file(
@@ -371,6 +383,16 @@ class FileMessageBody extends StatelessWidget {
       );
     }
 
+    final video = isVideoFileName(name);
+    if (saved && video && onOpen != null) {
+      return VideoMessageCard(
+        name: name,
+        size: size,
+        onPlay: onOpen!,
+        onReveal: onReveal,
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -378,8 +400,20 @@ class FileMessageBody extends StatelessWidget {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.insert_drive_file_outlined, size: 18, color: fg),
-            const SizedBox(width: 8),
+            Container(
+              width: 36,
+              height: 36,
+              decoration: const BoxDecoration(
+                color: AppTheme.accentSoft,
+                borderRadius: AppTheme.corners,
+              ),
+              child: Icon(
+                video ? Icons.movie_outlined : Icons.insert_drive_file_outlined,
+                size: 18,
+                color: AppTheme.accent,
+              ),
+            ),
+            const SizedBox(width: 12),
             Flexible(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -390,12 +424,13 @@ class FileMessageBody extends StatelessWidget {
                     style: TextStyle(
                       color: fg,
                       fontSize: 14,
-                      fontWeight: FontWeight.w400,
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
+                  const SizedBox(height: 2),
                   Text(
                     formatFileSize(size),
-                    style: TextStyle(color: muted, fontSize: 12),
+                    style: AppTheme.mono(color: muted),
                   ),
                 ],
               ),
@@ -407,15 +442,14 @@ class FileMessageBody extends StatelessWidget {
           _ProgressLine(
             done: downloadDone ?? 0,
             total: downloadTotal!,
-            color: fg,
-            track: muted,
+            color: AppTheme.accent,
           ),
           const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton(
               onPressed: onCancelDownload,
-              style: _compactButton(fg),
+              style: _compact(AppTheme.plainButton),
               child: const Text('取消'),
             ),
           ),
@@ -423,43 +457,51 @@ class FileMessageBody extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             fileTransferErrorText(downloadError),
-            style: const TextStyle(color: AppTheme.red, fontSize: 12),
+            style: const TextStyle(color: AppTheme.alert, fontSize: 12),
           ),
           const SizedBox(height: 2),
           if (!isDirect)
             Text(
               kOneTimeDownloadNotice,
-              style: TextStyle(color: muted, fontSize: 11),
+              style: const TextStyle(color: muted, fontSize: 11.5),
             ),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               if (onRetry != null)
-                TextButton(
-                  onPressed: onRetry,
-                  style: _compactButton(fg),
-                  child: const Text('重试'),
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, right: 8),
+                  child: TextButton(
+                    onPressed: onRetry,
+                    style: _compact(AppTheme.secondaryButton),
+                    child: const Text('重试'),
+                  ),
                 ),
               if (onDismiss != null)
-                TextButton(
-                  onPressed: onDismiss,
-                  style: _compactButton(fg),
-                  child: const Text('关闭'),
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: TextButton(
+                    onPressed: onDismiss,
+                    style: _compact(AppTheme.plainButton),
+                    child: const Text('关闭'),
+                  ),
                 ),
             ],
           ),
         ] else if (saved) ...[
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('已保存', style: TextStyle(color: muted, fontSize: 12)),
-              if (onReveal != null)
+              const Text('已保存', style: TextStyle(color: muted, fontSize: 12)),
+              if (onReveal != null) ...[
+                const SizedBox(width: 10),
                 TextButton(
                   onPressed: onReveal,
-                  style: _compactButton(fg),
+                  style: _compact(AppTheme.secondaryButton),
                   child: const Text('打开所在位置'),
                 ),
+              ],
             ],
           ),
         ] else if (localMissing) ...[
@@ -468,25 +510,148 @@ class FileMessageBody extends StatelessWidget {
             isSent
                 ? kSourceFileMissing
                 : (isDirect ? kDirectLocalMissing : kLocalFileMissing),
-            style: TextStyle(color: muted, fontSize: 11),
+            style: const TextStyle(color: muted, fontSize: 11.5),
           ),
         ] else if (onDownload != null) ...[
           const SizedBox(height: 6),
           Text(
             kOneTimeDownloadNotice,
-            style: TextStyle(color: muted, fontSize: 11),
+            style: const TextStyle(color: muted, fontSize: 11.5),
           ),
+          const SizedBox(height: 6),
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton(
               onPressed: onDownload,
-              style: _compactButton(fg),
+              style: _compact(AppTheme.primaryButton),
               child: const Text('下载'),
             ),
           ),
         ],
       ],
     );
+  }
+}
+
+/// 视频消息的卡片：16:9 的暗框，中间是播放键，下面是文件名和大小。
+///
+/// 点卡片用系统播放器打开；右键可以播放或打开所在位置。
+class VideoMessageCard extends StatelessWidget {
+  const VideoMessageCard({
+    super.key,
+    required this.name,
+    required this.size,
+    required this.onPlay,
+    this.onReveal,
+  });
+
+  final String name;
+  final int size;
+  final VoidCallback onPlay;
+  final VoidCallback? onReveal;
+
+  static const double width = 280;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: '用系统播放器打开',
+      waitDuration: const Duration(milliseconds: 800),
+      child: Pressable(
+        onPressed: onPlay,
+        onSecondaryTapUp: (details) => showTermMenuAt(
+          context,
+          details.globalPosition,
+          [('播放', onPlay), if (onReveal != null) ('打开所在位置', onReveal!)],
+        ),
+        builder: (context, states) {
+          final active =
+              states.contains(WidgetState.hovered) ||
+              states.contains(WidgetState.focused);
+          return SizedBox(
+            width: width,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: AnimatedContainer(
+                    duration: Motion.fast,
+                    decoration: BoxDecoration(
+                      color: AppTheme.bg,
+                      borderRadius: AppTheme.corners,
+                      border: Border.all(
+                        color: active ? AppTheme.accent : AppTheme.border,
+                      ),
+                    ),
+                    child: Stack(
+                      children: [
+                        const Positioned(
+                          left: 10,
+                          top: 8,
+                          child: TagLabel('VIDEO_', color: AppTheme.text3),
+                        ),
+                        Center(
+                          child: AnimatedContainer(
+                            duration: Motion.fast,
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: active
+                                  ? AppTheme.accent
+                                  : AppTheme.accentSoft,
+                              borderRadius: AppTheme.corners,
+                              border: Border.all(color: AppTheme.accent),
+                              boxShadow: active ? AppTheme.glow : null,
+                            ),
+                            child: Icon(
+                              Icons.play_arrow_rounded,
+                              size: 30,
+                              color: active
+                                  ? AppTheme.onAccent
+                                  : AppTheme.accent,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        name,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppTheme.text,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(formatFileSize(size), style: AppTheme.mono()),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// 用系统默认程序打开文件（视频就是系统播放器）。
+Future<void> openFileWithSystem(String path) async {
+  if (Platform.isWindows) {
+    await Process.start('explorer', [p.normalize(path)]);
+  } else if (Platform.isLinux) {
+    await Process.start('xdg-open', [path]);
+  } else if (Platform.isMacOS) {
+    await Process.start('open', [path]);
   }
 }
 
@@ -519,15 +684,17 @@ class FileIncomingTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final failed = error != null;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: AppTheme.white,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: failed ? AppTheme.red : AppTheme.lightGray),
+          color: failed ? AppTheme.alertSoft : AppTheme.field,
+          borderRadius: AppTheme.corners,
+          border: Border.all(
+            color: failed ? AppTheme.alertBorder : AppTheme.border,
+          ),
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+          padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -536,7 +703,7 @@ class FileIncomingTile extends StatelessWidget {
                   Icon(
                     failed ? Icons.error_outline : Icons.download_outlined,
                     size: 16,
-                    color: failed ? AppTheme.red : AppTheme.darkGray,
+                    color: failed ? AppTheme.alert : AppTheme.accent,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -546,7 +713,7 @@ class FileIncomingTile extends StatelessWidget {
                           : '收到文件 $name（${formatFileSize(size)}）',
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: failed ? AppTheme.red : AppTheme.black,
+                        color: failed ? AppTheme.alert : AppTheme.text,
                         fontSize: 13,
                       ),
                     ),
@@ -554,18 +721,19 @@ class FileIncomingTile extends StatelessWidget {
                   if (needsAccept) ...[
                     TextButton(
                       onPressed: onDecline,
-                      style: _compactButton(AppTheme.black),
+                      style: _compact(AppTheme.dangerButton),
                       child: const Text('拒绝'),
                     ),
+                    const SizedBox(width: 8),
                     TextButton(
                       onPressed: onAccept,
-                      style: _compactButton(AppTheme.black),
+                      style: _compact(AppTheme.primaryButton),
                       child: const Text('接受'),
                     ),
                   ] else
                     TextButton(
                       onPressed: onCancel,
-                      style: _compactButton(AppTheme.black),
+                      style: _compact(AppTheme.plainButton),
                       child: Text(failed ? '关闭' : '取消'),
                     ),
                 ],
@@ -575,7 +743,7 @@ class FileIncomingTile extends StatelessWidget {
                   padding: const EdgeInsets.only(right: 8, bottom: 4),
                   child: Text(
                     fileTransferErrorText(error),
-                    style: const TextStyle(color: AppTheme.red, fontSize: 12),
+                    style: const TextStyle(color: AppTheme.alert, fontSize: 12),
                   ),
                 )
               else if (needsAccept)
@@ -583,7 +751,7 @@ class FileIncomingTile extends StatelessWidget {
                   padding: EdgeInsets.only(right: 8, bottom: 4),
                   child: Text(
                     kDirectIncomingNotice,
-                    style: TextStyle(color: AppTheme.darkGray, fontSize: 11),
+                    style: TextStyle(color: AppTheme.text2, fontSize: 11.5),
                   ),
                 )
               else
@@ -592,7 +760,7 @@ class FileIncomingTile extends StatelessWidget {
                   child: _ProgressLine(
                     done: done,
                     total: total,
-                    color: AppTheme.black,
+                    color: AppTheme.accent,
                   ),
                 ),
             ],
@@ -608,13 +776,11 @@ class _ProgressLine extends StatelessWidget {
     required this.done,
     required this.total,
     required this.color,
-    this.track,
   });
 
   final int done;
   final int total;
   final Color color;
-  final Color? track;
 
   @override
   Widget build(BuildContext context) {
@@ -622,26 +788,27 @@ class _ProgressLine extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        LinearProgressIndicator(
-          value: value,
-          minHeight: 3,
-          color: color,
-          backgroundColor: track ?? AppTheme.lightGray,
-        ),
-        const SizedBox(height: 4),
+        GlowProgress(value: value, color: color),
+        const SizedBox(height: 5),
         Text(
           '${formatFileSize(done)} / ${formatFileSize(total)}',
-          style: TextStyle(color: color, fontSize: 11),
+          style: AppTheme.mono(size: 11),
         ),
       ],
     );
   }
 }
 
-ButtonStyle _compactButton(Color color) => TextButton.styleFrom(
-  foregroundColor: color,
-  visualDensity: VisualDensity.compact,
-  padding: const EdgeInsets.symmetric(horizontal: 8),
-  minimumSize: const Size(0, 32),
-  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+/// 卡片里的小号按钮：样式跟 [base] 走，只是矮一点、窄一点。
+ButtonStyle _compact(ButtonStyle base) => base.copyWith(
+  minimumSize: WidgetStateProperty.all(const Size(0, 30)),
+  padding: WidgetStateProperty.all(const EdgeInsets.symmetric(horizontal: 12)),
+  textStyle: WidgetStateProperty.all(
+    const TextStyle(
+      fontSize: 12.5,
+      fontWeight: FontWeight.w600,
+      fontFamily: AppTheme.fontFamily,
+      fontFamilyFallback: AppTheme.fontFallback,
+    ),
+  ),
 );

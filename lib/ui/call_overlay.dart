@@ -232,37 +232,43 @@ class CallBar extends StatelessWidget {
         active ||
         snapshot.phase == CallPhase.connecting ||
         snapshot.phase == CallPhase.outgoing;
-    const detailStyle = TextStyle(
-      color: AppTheme.midGray,
-      fontSize: 11,
-      fontFeatures: AppTheme.tabularFigures,
-    );
+    final detailStyle = AppTheme.mono(color: AppTheme.text3, size: 11);
+    // 左侧色带和状态文字：红＝来电，绿＝通话中，黄＝还没接通或在重连，暗＝已结束。
+    final Color tone = switch (snapshot.phase) {
+      CallPhase.incoming => AppTheme.alert,
+      CallPhase.active => live ? AppTheme.accent : AppTheme.amber,
+      CallPhase.outgoing || CallPhase.connecting => AppTheme.amber,
+      CallPhase.ended || CallPhase.idle => AppTheme.border,
+    };
+    final ended = snapshot.phase == CallPhase.ended;
     return Material(
-      color: AppTheme.white,
+      color: AppTheme.panel,
       child: SafeArea(
         bottom: false,
         child: Container(
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
-          decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: AppTheme.lightGray)),
+          constraints: const BoxConstraints(minHeight: 56),
+          padding: const EdgeInsets.fromLTRB(13, 9, 12, 9),
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(color: tone, width: 3),
+              bottom: const BorderSide(color: AppTheme.divider),
+            ),
           ),
           child: Row(
             children: [
-              // 接通后是绿色，其余阶段是黑白：一眼能看出电话通没通。
               Container(
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: live ? AppTheme.greenTint : AppTheme.surface,
-                  shape: BoxShape.circle,
+                  color: live ? AppTheme.accentSoft : AppTheme.field,
+                  borderRadius: AppTheme.corners,
+                  border: Border.all(color: tone),
                 ),
                 child: Icon(
-                  snapshot.phase == CallPhase.ended
-                      ? Icons.call_end_outlined
-                      : Icons.call_outlined,
+                  ended ? Icons.call_end_outlined : Icons.call_outlined,
                   size: 18,
-                  color: live ? AppTheme.green : AppTheme.black,
+                  color: ended ? AppTheme.text3 : tone,
                 ),
               ),
               const SizedBox(width: 12),
@@ -278,8 +284,8 @@ class CallBar extends StatelessWidget {
                             displayName,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: AppTheme.black,
-                              fontSize: 15,
+                              color: AppTheme.text,
+                              fontSize: 14,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -288,9 +294,9 @@ class CallBar extends StatelessWidget {
                         Text(
                           status,
                           style: TextStyle(
-                            color: live ? AppTheme.green : AppTheme.darkGray,
+                            color: ended ? AppTheme.text2 : tone,
                             fontSize: 13,
-                            fontWeight: FontWeight.w500,
+                            fontWeight: FontWeight.w600,
                             fontFeatures: AppTheme.tabularFigures,
                           ),
                         ),
@@ -304,7 +310,7 @@ class CallBar extends StatelessWidget {
                           const Icon(
                             Icons.lock_outline,
                             size: 12,
-                            color: AppTheme.darkGray,
+                            color: AppTheme.text2,
                           ),
                           const SizedBox(width: 4),
                           Flexible(
@@ -312,7 +318,7 @@ class CallBar extends StatelessWidget {
                               '端到端加密 · ${callPathLabel(path!)}',
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                color: AppTheme.darkGray,
+                                color: AppTheme.text2,
                                 fontSize: 12,
                               ),
                             ),
@@ -343,7 +349,7 @@ class CallBar extends StatelessWidget {
                 const SizedBox(width: 8),
                 MicLevelBar(level: snapshot.muted ? 0 : micLevel),
               ],
-              const SizedBox(width: 8),
+              const SizedBox(width: 12),
               ..._actions(),
             ],
           ),
@@ -359,14 +365,15 @@ class CallBar extends StatelessWidget {
           _BarButton(
             label: '拒接',
             icon: Icons.call_end,
-            filled: AppTheme.red,
+            style: AppTheme.dangerButton,
             onPressed: () => unawaited(_calls.decline()),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 8),
           _BarButton(
             label: '接听',
             icon: Icons.call,
-            filled: AppTheme.green,
+            style: AppTheme.primaryButton,
+            glow: AppTheme.glow,
             onPressed: () => unawaited(_calls.accept()),
           ),
         ];
@@ -377,20 +384,29 @@ class CallBar extends StatelessWidget {
           _BarButton(
             label: snapshot.muted ? '取消静音' : '静音',
             icon: snapshot.muted ? Icons.mic_off : Icons.mic_none,
-            filled: snapshot.muted ? AppTheme.darkGray : null,
+            // 已静音时按钮亮起来，提醒对方现在听不到你。
+            style: snapshot.muted
+                ? AppTheme.secondaryButton
+                : AppTheme.plainButton,
             onPressed: () => _calls.setMuted(!snapshot.muted),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 8),
           _BarButton(
             label: '挂断',
             icon: Icons.call_end,
-            filled: AppTheme.red,
+            style: AppTheme.dangerFilledButton,
+            glow: AppTheme.alertGlow,
             onPressed: () => unawaited(_calls.hangup()),
           ),
         ];
       case CallPhase.ended:
         return [
-          _BarButton(label: '关闭', icon: Icons.close, onPressed: _calls.dismiss),
+          _BarButton(
+            label: '关闭',
+            icon: Icons.close,
+            style: AppTheme.plainButton,
+            onPressed: _calls.dismiss,
+          ),
         ];
       case CallPhase.idle:
         return const [];
@@ -403,50 +419,34 @@ class _BarButton extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.onPressed,
-    this.filled,
+    required this.style,
+    this.glow,
   });
 
   final String label;
   final IconData icon;
   final VoidCallback onPressed;
+  final ButtonStyle style;
 
-  /// 实心底色；为 null 时是白底细边框。
-  final Color? filled;
+  /// 实心按钮外面的辉光。
+  final List<BoxShadow>? glow;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 4),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Material(
-            color: filled ?? AppTheme.white,
-            shape: CircleBorder(
-              side: filled == null
-                  ? const BorderSide(color: AppTheme.lightGray)
-                  : BorderSide.none,
-            ),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: onPressed,
-              child: SizedBox(
-                width: 38,
-                height: 38,
-                child: Icon(
-                  icon,
-                  color: filled == null ? AppTheme.black : AppTheme.white,
-                  size: 18,
-                ),
-              ),
-            ),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: AppTheme.corners,
+        boxShadow: glow,
+      ),
+      child: TextButton.icon(
+        style: style.copyWith(
+          padding: WidgetStateProperty.all(
+            const EdgeInsets.symmetric(horizontal: 14),
           ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: const TextStyle(color: AppTheme.darkGray, fontSize: 10),
-          ),
-        ],
+        ),
+        onPressed: onPressed,
+        icon: Icon(icon),
+        label: Text(label),
       ),
     );
   }
@@ -539,7 +539,7 @@ class MicLevelBar extends StatelessWidget {
     final filled = (level.clamp(0.0, 1.0) * _segments).ceil();
     return SizedBox(
       width: 56,
-      height: 6,
+      height: 12,
       child: Row(
         // 不拉伸的话每一格高度是 0，整条电平条看不见。
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -549,8 +549,7 @@ class MicLevelBar extends StatelessWidget {
             Expanded(
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: i < filled ? AppTheme.green : AppTheme.lightGray,
-                  borderRadius: BorderRadius.circular(2),
+                  color: i < filled ? AppTheme.accent : AppTheme.border,
                 ),
               ),
             ),

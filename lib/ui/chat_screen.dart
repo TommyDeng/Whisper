@@ -1,6 +1,6 @@
 /// 耳语 Whisper - 聊天界面
 ///
-/// 1:1 E2EE 文字聊天。黑白/单色细线条风格，安全状态常驻显示。
+/// 1:1 E2EE 文字聊天。安全状态常驻显示在标题栏。
 library;
 
 import 'dart:async';
@@ -19,6 +19,7 @@ import '../messaging/message_codec.dart';
 import '../messaging/messaging_service.dart';
 import '../relay/session_client.dart';
 import 'app_theme.dart';
+import 'chat_text.dart';
 import 'clipboard_image.dart';
 import 'file_transfer_ui.dart';
 
@@ -30,7 +31,6 @@ class ChatBubble extends StatelessWidget {
 
   /// 自己发出的消息的状态；收到的消息为 null。
   final OutgoingStatus? status;
-  final SecurityStatus securityStatus;
 
   /// 阅后即焚的消息：对方读过之后两边都会删除。
   final bool burn;
@@ -41,39 +41,41 @@ class ChatBubble extends StatelessWidget {
     this.child,
     required this.isSent,
     this.status,
-    this.securityStatus = SecurityStatus.unverified,
     this.burn = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final (icon, tooltip, color) = switch (status) {
-      OutgoingStatus.sending => (Icons.schedule, '发送中', AppTheme.midGray),
-      OutgoingStatus.sent => (Icons.done, '已发送', AppTheme.midGray),
-      OutgoingStatus.delivered => (Icons.done_all, '已送达', AppTheme.midGray),
-      OutgoingStatus.failed => (Icons.error_outline, '发送失败', AppTheme.red),
-      null => (Icons.done, '', AppTheme.midGray),
+      OutgoingStatus.sending => (Icons.schedule, '发送中', AppTheme.text3),
+      OutgoingStatus.sent => (Icons.done, '已发送', AppTheme.text3),
+      OutgoingStatus.delivered => (Icons.done_all, '已送达', AppTheme.text2),
+      OutgoingStatus.failed => (Icons.error_outline, '发送失败', AppTheme.alert),
+      null => (Icons.done, '', AppTheme.text3),
     };
     const burnMark = Tooltip(
       message: '阅后即焚：读过之后两边都会删除',
       child: Icon(
         Icons.local_fire_department_outlined,
         size: 14,
-        color: AppTheme.midGray,
+        color: AppTheme.alert,
       ),
     );
-    final fg = isSent ? AppTheme.white : AppTheme.black;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       mainAxisAlignment: isSent
           ? MainAxisAlignment.end
           : MainAxisAlignment.start,
       children: [
-        if (!isSent) ...[
-          SecurityIcon(status: securityStatus, size: 14),
-          const SizedBox(width: 8),
-        ],
+        // 自己发的：阅后即焚标记和发送状态在气泡左边，贴着气泡。
         if (isSent && burn) ...[burnMark, const SizedBox(width: 4)],
+        if (isSent && status != null) ...[
+          Tooltip(
+            message: tooltip,
+            child: Icon(icon, size: 14, color: color),
+          ),
+          const SizedBox(width: 6),
+        ],
         Flexible(
           child: Container(
             constraints: BoxConstraints(
@@ -82,35 +84,30 @@ class ChatBubble extends StatelessWidget {
             ),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
             decoration: BoxDecoration(
-              color: isSent ? AppTheme.black : AppTheme.surface,
-              borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(14),
-                topRight: const Radius.circular(14),
-                bottomLeft: Radius.circular(isSent ? 14 : 4),
-                bottomRight: Radius.circular(isSent ? 4 : 14),
+              color: isSent ? AppTheme.sentBg : AppTheme.raised,
+              borderRadius: AppTheme.corners,
+              border: Border.all(
+                color: isSent ? AppTheme.accent : AppTheme.border,
               ),
+              boxShadow: isSent ? AppTheme.glow : null,
             ),
             child:
                 child ??
-                SelectableText(
+                MessageText(
                   text ?? '',
                   style: TextStyle(
-                    color: fg,
-                    fontSize: 14,
+                    color: isSent ? AppTheme.sentText : AppTheme.text,
+                    fontSize: 14.5,
                     height: 1.45,
                     fontWeight: FontWeight.w400,
                   ),
+                  linkColor: AppTheme.accent,
+                  onLinkOpenFailed: () => ScaffoldMessenger.maybeOf(context)
+                      ?.showSnackBar(const SnackBar(content: Text('无法打开这个链接'))),
                 ),
           ),
         ),
-        if (!isSent && burn) ...[const SizedBox(width: 4), burnMark],
-        if (isSent && status != null) ...[
-          const SizedBox(width: 4),
-          Tooltip(
-            message: tooltip,
-            child: Icon(icon, size: 12, color: color),
-          ),
-        ],
+        if (!isSent && burn) ...[const SizedBox(width: 6), burnMark],
       ],
     );
   }
@@ -126,7 +123,16 @@ class ChatScreen extends StatefulWidget {
   final FileShareService? files;
   final FileLocationPicker? filePicker;
   final Future<void> Function(String path)? revealFile;
+
+  /// 用系统程序打开文件（播放视频）；测试时替换。
+  final Future<void> Function(String path)? openFile;
   final Future<bool> Function(String path)? copyImage;
+
+  /// 单栏时给：标题栏左边出现返回按钮。分栏时不给。
+  final VoidCallback? onBack;
+
+  /// 把收到的消息标成已读之后调用，联系人列表用它刷新未读数。
+  final VoidCallback? onRead;
 
   const ChatScreen({
     super.key,
@@ -136,7 +142,10 @@ class ChatScreen extends StatefulWidget {
     this.files,
     this.filePicker,
     this.revealFile,
+    this.openFile,
     this.copyImage,
+    this.onBack,
+    this.onRead,
   });
 
   @override
@@ -231,6 +240,7 @@ class _ChatScreenState extends State<ChatScreen> {
         if (messages.any((message) => !message.isSent)) {
           try {
             await _messaging.markRead(widget.contact);
+            widget.onRead?.call();
           } catch (_) {
             // 标记失败不影响显示，下次刷新再试
           }
@@ -448,6 +458,15 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _openFile(String path) async {
+    final open = widget.openFile ?? openFileWithSystem;
+    try {
+      await open(path);
+    } catch (_) {
+      _toast('无法打开这个文件。');
+    }
+  }
+
   Future<void> _copyImage(String path) async {
     final copy = widget.copyImage ?? copyImageFileToClipboard;
     final ok = await copy(path);
@@ -503,25 +522,47 @@ class _ChatScreenState extends State<ChatScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(text),
-        backgroundColor: error ? AppTheme.red : null,
+        backgroundColor: error ? AppTheme.alertSoft : null,
+        shape: error
+            ? const RoundedRectangleBorder(
+                borderRadius: AppTheme.corners,
+                side: BorderSide(color: AppTheme.alert),
+              )
+            : null,
       ),
     );
   }
 
   Future<void> _showSafetyCode() async {
-    final verified = await showDialog<bool>(
+    final verified = await showTermDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('安全码'),
+      builder: (context) => TermDialog(
+        title: '安全码',
+        tag: 'VERIFY_',
         content: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text('通过电话或当面，和对方核对这串安全码。两边一致，说明没有人冒充对方。'),
-            const SizedBox(height: 12),
-            SelectableText(
-              widget.contact.safetyCode,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppTheme.field,
+                borderRadius: AppTheme.corners,
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: SelectableText(
+                widget.contact.safetyCode,
+                textAlign: TextAlign.center,
+                style: AppTheme.mono(
+                  color: _verified ? AppTheme.accent : AppTheme.amber,
+                  size: 15,
+                  weight: FontWeight.w600,
+                  letterSpacing: 1.5,
+                  height: 1.6,
+                ),
+              ),
             ),
           ],
         ),
@@ -531,7 +572,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: const Text('关闭'),
           ),
           if (_verified)
-            TextButton(
+            OutlinedButton(
               onPressed: () => Navigator.of(context).pop(false),
               child: const Text('取消已验证标记'),
             )
@@ -598,56 +639,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final uploads = _files.uploads(_sessionId);
     final incoming = _files.incoming(_sessionId);
     return Scaffold(
-      appBar: AppBar(
-        title: InkWell(
-          onTap: _showSafetyCode,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SecurityIcon(status: _security, size: 14),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  widget.contactName,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
-        shape: const Border(bottom: BorderSide(color: AppTheme.lightGray)),
-        actions: [
-          IconButton(
-            tooltip: '语音通话',
-            icon: const Icon(Icons.call_outlined, color: AppTheme.black),
-            onPressed: () => unawaited(_startCall()),
-          ),
-          IconButton(
-            tooltip: _burn ? '关闭阅后即焚' : '开启阅后即焚',
-            icon: Icon(
-              _burn
-                  ? Icons.local_fire_department
-                  : Icons.local_fire_department_outlined,
-              color: _burn ? AppTheme.black : AppTheme.midGray,
-            ),
-            onPressed: () => unawaited(_toggleBurn()),
-          ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(26),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.only(left: 56, right: 16, bottom: 8),
-            child: Text(
-              '${_verified ? '已验证' : '未验证'} · $_linkText',
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppTheme.midGray, fontSize: 12),
-            ),
-          ),
-        ),
-      ),
+      backgroundColor: AppTheme.bg,
       body: Column(
         children: [
+          _buildHeader(),
           Expanded(child: _buildMessages()),
           for (final state in uploads)
             FileUploadTile(
@@ -678,88 +673,175 @@ class _ChatScreenState extends State<ChatScreen> {
                   ? null
                   : () => _files.cancel(state.id),
             ),
-          Container(
-            padding: const EdgeInsets.fromLTRB(8, 10, 12, 10),
-            decoration: const BoxDecoration(
-              color: AppTheme.white,
-              border: Border(
-                top: BorderSide(color: AppTheme.lightGray, width: 1),
-              ),
+          _buildComposer(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    final online = _messaging.peerOnline(_sessionId);
+    return Container(
+      height: 64,
+      padding: EdgeInsets.only(left: widget.onBack == null ? 24 : 8, right: 12),
+      decoration: const BoxDecoration(
+        color: AppTheme.panel,
+        border: Border(bottom: BorderSide(color: AppTheme.divider)),
+      ),
+      child: Row(
+        children: [
+          if (widget.onBack != null) ...[
+            TermIconButton(
+              tooltip: '返回',
+              icon: Icons.arrow_back,
+              onPressed: widget.onBack,
             ),
-            child: Row(
-              children: [
-                IconButton(
-                  tooltip: _burn ? kBurnDisablesFileSend : '发送文件',
-                  icon: Icon(
-                    Icons.attach_file,
-                    color: _burn ? AppTheme.lightGray : AppTheme.darkGray,
-                  ),
-                  onPressed: _burn ? null : () => unawaited(_sendFile()),
-                ),
-                Expanded(
-                  child: CallbackShortcuts(
-                    bindings: {
-                      const SingleActivator(
-                        LogicalKeyboardKey.keyV,
-                        control: true,
-                      ): () =>
-                          unawaited(_pasteIntoChat()),
-                      const SingleActivator(
-                        LogicalKeyboardKey.keyV,
-                        meta: true,
-                      ): () =>
-                          unawaited(_pasteIntoChat()),
-                    },
-                    child: TextField(
-                      controller: _textController,
-                      focusNode: _focusNode,
-                      autofocus: true,
-                      decoration: InputDecoration(
-                        hintText: _burn ? '输入消息（阅后即焚）' : '输入消息',
-                        hintStyle: const TextStyle(
-                          color: AppTheme.midGray,
-                          fontSize: 14,
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          borderSide: BorderSide.none,
-                        ),
-                        filled: true,
-                        fillColor: AppTheme.surface,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 11,
+            const SizedBox(width: 4),
+          ],
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Tooltip(
+                message: '查看安全码',
+                child: InkWell(
+                  onTap: _showSafetyCode,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ContactMark(
+                        name: widget.contactName,
+                        online: online,
+                        size: 36,
+                      ),
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    widget.contactName,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: AppTheme.text,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                SecurityIcon(status: _security, size: 14),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${_verified ? '已验证' : '未验证'} · $_linkText',
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: _verified
+                                    ? AppTheme.text2
+                                    : AppTheme.amber,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      maxLines: 1,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => unawaited(_sendMessage()),
-                    ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                Container(
-                  decoration: const BoxDecoration(
-                    color: AppTheme.black,
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    tooltip: '发送',
-                    icon: const Icon(
-                      Icons.send,
-                      size: 18,
-                      color: AppTheme.white,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SquareIconButton(
+            tooltip: '语音通话',
+            icon: Icons.call_outlined,
+            onPressed: () => unawaited(_startCall()),
+          ),
+          const SizedBox(width: 4),
+          TermIconButton(
+            tooltip: _burn ? '关闭阅后即焚' : '开启阅后即焚',
+            icon: _burn
+                ? Icons.local_fire_department
+                : Icons.local_fire_department_outlined,
+            color: _burn ? AppTheme.alert : AppTheme.text2,
+            onPressed: () => unawaited(_toggleBurn()),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildComposer() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 20, 16),
+      child: Row(
+        children: [
+          TermIconButton(
+            tooltip: _burn ? kBurnDisablesFileSend : '发送文件',
+            icon: Icons.attach_file,
+            onPressed: _burn ? null : () => unawaited(_sendFile()),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: CallbackShortcuts(
+              bindings: {
+                const SingleActivator(
+                  LogicalKeyboardKey.keyV,
+                  control: true,
+                ): () =>
+                    unawaited(_pasteIntoChat()),
+                const SingleActivator(
+                  LogicalKeyboardKey.keyV,
+                  meta: true,
+                ): () =>
+                    unawaited(_pasteIntoChat()),
+              },
+              child: TextField(
+                controller: _textController,
+                focusNode: _focusNode,
+                autofocus: true,
+                style: const TextStyle(color: AppTheme.text, fontSize: 14.5),
+                decoration: InputDecoration(
+                  hintText: _burn ? '输入消息（阅后即焚）' : '输入消息',
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 11),
+                  // 终端提示符。
+                  prefixIcon: Padding(
+                    padding: const EdgeInsets.only(left: 14, right: 8),
+                    child: Text(
+                      '>',
+                      style: AppTheme.mono(
+                        color: AppTheme.accent,
+                        size: 14.5,
+                        weight: FontWeight.w600,
+                      ),
                     ),
-                    onPressed: () => unawaited(_sendMessage()),
-                    constraints: const BoxConstraints(
-                      minWidth: 36,
-                      minHeight: 36,
-                    ),
-                    padding: EdgeInsets.zero,
                   ),
+                  prefixIconConstraints: const BoxConstraints(),
+                  suffixIcon: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: SquareIconButton(
+                      tooltip: '发送',
+                      icon: Icons.arrow_upward,
+                      size: 28,
+                      iconSize: 16,
+                      background: AppTheme.accent,
+                      foreground: AppTheme.onAccent,
+                      onPressed: () => unawaited(_sendMessage()),
+                    ),
+                  ),
+                  suffixIconConstraints: const BoxConstraints(),
                 ),
-              ],
+                maxLines: 1,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => unawaited(_sendMessage()),
+              ),
             ),
           ),
         ],
@@ -776,27 +858,27 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_outline, size: 32, color: AppTheme.lightGray),
+            Icon(Icons.lock_outline, size: 32, color: AppTheme.text3),
             SizedBox(height: 14),
             Text(
               '暂无消息',
               style: TextStyle(
-                color: AppTheme.black,
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
+                color: AppTheme.text,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
               ),
             ),
             SizedBox(height: 6),
             Text(
               '消息端到端加密，只有你们两人能看到',
-              style: TextStyle(color: AppTheme.midGray, fontSize: 13),
+              style: TextStyle(color: AppTheme.text2, fontSize: 12.5),
             ),
           ],
         ),
       );
     }
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
       reverse: true,
       itemCount: _messages.length,
       itemBuilder: (context, index) {
@@ -810,7 +892,6 @@ class _ChatScreenState extends State<ChatScreen> {
             child: ChatBubble(
               isSent: message.isSent,
               status: message.status,
-              securityStatus: _security,
               burn: message.burn,
               child: FileMessageBody(
                 name: file.safeName,
@@ -847,6 +928,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 onSaveImage: path != null
                     ? () => unawaited(_saveImage(path, file.safeName))
                     : null,
+                onOpen: path != null && !_pathMissing(path)
+                    ? () => unawaited(_openFile(path))
+                    : null,
               ),
             ),
           );
@@ -857,7 +941,6 @@ class _ChatScreenState extends State<ChatScreen> {
             text: message.text ?? '（这条消息无法解密）',
             isSent: message.isSent,
             status: message.status,
-            securityStatus: _security,
             burn: message.burn,
           ),
         );
