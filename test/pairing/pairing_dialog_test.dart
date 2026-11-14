@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,23 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:whisper/pairing/invitation_code.dart';
 import 'package:whisper/pairing/pairing_manager.dart';
 import 'package:whisper/pairing/pairing_page.dart';
+import 'package:whisper/ui/app_theme.dart';
+
+/// 邀请码要等 [ready] 完成才生成，用来看生成前后对话框大小。
+class _SlowManager extends _FakeManager {
+  final ready = Completer<void>();
+  bool _made = false;
+
+  @override
+  InvitationCode? get openInvitation => _made ? _invitation : null;
+
+  @override
+  Future<InvitationCode> ensureInvitation() async {
+    await ready.future;
+    _made = true;
+    return _invitation;
+  }
+}
 
 class _FakeManager extends Fake implements PairingManager {
   final _invitation = InvitationCode(
@@ -72,9 +90,41 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: PairingPage(manager: _FakeManager()))),
+      MaterialApp(
+        home: Scaffold(body: PairingPage(manager: _FakeManager())),
+      ),
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('邀请码生成前后对话框一样大，不跳动', (tester) async {
+    tester.view.physicalSize = const Size(1000, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final manager = _SlowManager();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: Scaffold(body: PairingPage(manager: manager)),
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(QrImageView), findsNothing);
+    final before = tester.getRect(find.byType(Dialog));
+
+    manager.ready.complete();
+    await tester.pumpAndSettle();
+    expect(find.byType(QrImageView), findsOneWidget);
+    expect(tester.getRect(find.byType(Dialog)), before);
+  });
+
+  testWidgets('已有邀请码时第一帧就显示二维码', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: PairingPage(manager: _FakeManager())),
+      ),
+    );
+    expect(find.byType(QrImageView), findsOneWidget);
   });
 }

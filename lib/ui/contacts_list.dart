@@ -1,10 +1,11 @@
 /// 耳语 Whisper - 联系人列表界面
 ///
-/// 黑白/单色细线条风格，无头像墙、无红点轰炸。
-/// 安全状态（已验证/未验证）用简单线条图标常驻显示。
+/// 宽窗口左右分栏：左边联系人，右边聊天；窄窗口退回单栏。
+/// 安全状态（已验证/未验证）常驻显示。
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
@@ -24,6 +25,9 @@ class ContactItem extends StatefulWidget {
   final Contact contact;
   final bool online;
   final int unread;
+
+  /// 分栏时右边正在看的就是这位联系人。
+  final bool selected;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
@@ -34,6 +38,7 @@ class ContactItem extends StatefulWidget {
     required this.onDelete,
     this.online = false,
     this.unread = 0,
+    this.selected = false,
   });
 
   @override
@@ -45,118 +50,148 @@ class _ContactItemState extends State<ContactItem> {
 
   Contact get _contact => widget.contact;
 
+  /// 公钥的前 4 个字节，写成十六进制，前面带 `0x`。只是帮人认出是哪一把钥匙，不是安全码。
   String get _fingerprint {
     final key = _contact.x25519PublicKeyBase64;
+    try {
+      final bytes = base64.decode(base64.normalize(key));
+      if (bytes.length >= 4) {
+        final hex = bytes
+            .take(4)
+            .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+            .join();
+        return '0x$hex';
+      }
+    } on FormatException {
+      // 不是合法的 Base64（旧数据），退回原样显示。
+    }
     return key.length > 8 ? key.substring(0, 8) : key;
   }
 
   @override
   Widget build(BuildContext context) {
-    const subtitleStyle = TextStyle(
-      color: AppTheme.midGray,
-      fontSize: 12,
-      fontWeight: FontWeight.w400,
-    );
+    final selected = widget.selected;
+    final rowColor = selected
+        ? AppTheme.accentSoft
+        : (_hovered ? AppTheme.hover : AppTheme.panel);
+    const subtitleStyle = TextStyle(color: AppTheme.text2, fontSize: 12);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
-      child: InkWell(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 16),
-          child: Container(
-            height: 64,
-            padding: const EdgeInsets.only(right: 8),
-            decoration: const BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: AppTheme.lightGray, width: 1),
+        child: Container(
+          key: ValueKey('contact-row-${_contact.deviceId}'),
+          height: 60,
+          margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
+          padding: const EdgeInsets.only(left: 8, right: 4),
+          decoration: BoxDecoration(
+            color: rowColor,
+            borderRadius: AppTheme.corners,
+            border: Border(
+              left: BorderSide(
+                color: selected ? AppTheme.accent : rowColor,
+                width: 2,
               ),
             ),
-            child: Row(
-              children: [
-                ContactMark(name: _contact.name, online: widget.online),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              _contact.name,
-                              style: TextStyle(
-                                color: AppTheme.black,
-                                fontSize: 15,
-                                fontWeight: widget.unread > 0
-                                    ? FontWeight.w600
-                                    : FontWeight.w500,
-                              ),
-                              overflow: TextOverflow.ellipsis,
+          ),
+          child: Row(
+            children: [
+              ContactMark(
+                name: _contact.name,
+                online: widget.online,
+                ring: rowColor,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            _contact.name,
+                            style: TextStyle(
+                              color: selected
+                                  ? AppTheme.textBright
+                                  : AppTheme.text,
+                              fontSize: 15,
+                              fontWeight: widget.unread > 0
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
                             ),
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          const SizedBox(width: 6),
-                          Tooltip(
-                            message: _contact.isVerified ? '已验证安全码' : '还没验证安全码',
-                            child: SecurityIcon(
-                              status: _contact.isVerified
-                                  ? SecurityStatus.verified
-                                  : SecurityStatus.unverified,
-                              size: 13,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 3),
-                      if (!_contact.hasSession)
-                        const Text(
-                          '旧版联系人，需要重新配对',
-                          style: subtitleStyle,
-                          overflow: TextOverflow.ellipsis,
-                        )
-                      else
-                        Text.rich(
-                          TextSpan(
-                            children: [
-                              if (widget.online)
-                                const TextSpan(
-                                  text: '在线',
-                                  style: TextStyle(color: AppTheme.green),
-                                )
-                              else
-                                const TextSpan(text: '离线'),
-                              TextSpan(text: '  $_fingerprint'),
-                            ],
-                          ),
-                          style: subtitleStyle,
-                          overflow: TextOverflow.ellipsis,
                         ),
-                    ],
-                  ),
-                ),
-                if (widget.unread > 0) ...[
-                  _UnreadBadge(count: widget.unread),
-                  const SizedBox(width: 4),
-                ],
-                // 删除按钮平时收着，鼠标移到这一行才出现；位置一直占着，行内不会跳。
-                Visibility(
-                  visible: _hovered,
-                  maintainSize: true,
-                  maintainAnimation: true,
-                  maintainState: true,
-                  child: IconButton(
-                    tooltip: '删除联系人',
-                    icon: const Icon(
-                      Icons.close,
-                      size: 16,
-                      color: AppTheme.midGray,
+                        const SizedBox(width: 6),
+                        Tooltip(
+                          message: _contact.isVerified ? '已验证安全码' : '还没验证安全码',
+                          child: SecurityIcon(
+                            status: _contact.isVerified
+                                ? SecurityStatus.verified
+                                : SecurityStatus.unverified,
+                            size: 13,
+                          ),
+                        ),
+                      ],
                     ),
-                    onPressed: widget.onDelete,
-                  ),
+                    const SizedBox(height: 3),
+                    if (!_contact.hasSession)
+                      const Text(
+                        '旧版联系人，需要重新配对',
+                        style: subtitleStyle,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    else
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            if (widget.online)
+                              const TextSpan(
+                                text: '在线',
+                                style: TextStyle(color: AppTheme.accent),
+                              )
+                            else
+                              const TextSpan(text: '离线'),
+                            TextSpan(
+                              text: '  $_fingerprint',
+                              style: AppTheme.mono(
+                                color: selected
+                                    ? AppTheme.text2
+                                    : AppTheme.text3,
+                              ),
+                            ),
+                          ],
+                        ),
+                        style: subtitleStyle,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                  ],
                 ),
+              ),
+              if (widget.unread > 0) ...[
+                _UnreadBadge(count: widget.unread),
+                const SizedBox(width: 4),
               ],
-            ),
+              // 删除按钮平时收着，鼠标移到这一行才出现；位置一直占着，行内不会跳。
+              Visibility(
+                visible: _hovered,
+                maintainSize: true,
+                maintainAnimation: true,
+                maintainState: true,
+                child: TermIconButton(
+                  tooltip: '删除联系人',
+                  size: 30,
+                  iconSize: 16,
+                  icon: Icons.close,
+                  hoverColor: AppTheme.alert,
+                  onPressed: widget.onDelete,
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -166,7 +201,23 @@ class _ContactItemState extends State<ContactItem> {
 
 /// 联系人列表页面
 class ContactsListScreen extends StatefulWidget {
-  const ContactsListScreen({super.key});
+  const ContactsListScreen({
+    super.key,
+    this.loadContacts,
+    this.loadUnread,
+    this.isOnline,
+    this.chatBuilder,
+    this.removeContact,
+  });
+
+  /// 下面几个参数只给测试用：正式界面读本地库、走 [AppServices]。
+  final Future<List<Contact>> Function()? loadContacts;
+  final Future<Map<String, int>> Function()? loadUnread;
+  final bool Function(Contact contact)? isOnline;
+
+  /// 造聊天界面；[onBack] 只在单栏时不为 null。
+  final Widget Function(Contact contact, VoidCallback? onBack)? chatBuilder;
+  final Future<void> Function(Contact contact)? removeContact;
 
   @override
   State<ContactsListScreen> createState() => _ContactsListScreenState();
@@ -178,6 +229,18 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
   List<Contact> _contacts = [];
   Map<String, int> _unread = {};
   bool _isLoading = true;
+
+  /// 正在看的联系人（按设备 id 记）。分栏时显示在右边，单栏时整页显示。
+  String? _selectedId;
+
+  Contact? get _selected {
+    final id = _selectedId;
+    if (id == null) return null;
+    for (final contact in _contacts) {
+      if (contact.deviceId == id) return contact;
+    }
+    return null;
+  }
 
   @override
   void initState() {
@@ -210,12 +273,12 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
     List<Contact> contacts;
     Map<String, int> unread;
     try {
-      contacts = await ContactStore.getAllContacts();
+      contacts = await (widget.loadContacts ?? ContactStore.getAllContacts)();
     } catch (_) {
       contacts = _contacts;
     }
     try {
-      unread = await LocalDatabase.unreadCounts();
+      unread = await (widget.loadUnread ?? LocalDatabase.unreadCounts)();
     } catch (_) {
       unread = _unread;
     }
@@ -250,20 +313,22 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
       ).showSnackBar(const SnackBar(content: Text('这位联系人是旧版本添加的，请删除后重新配对。')));
       return;
     }
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (context) =>
-            ChatScreen(contactName: contact.name, contact: contact),
-      ),
-    );
-    await _loadContacts();
+    // 不跳页：分栏时换右边的内容，单栏时在原地换成聊天。
+    setState(() => _selectedId = contact.deviceId);
+  }
+
+  void _closeChat() {
+    setState(() => _selectedId = null);
+    unawaited(_loadContacts());
   }
 
   Future<void> _deleteContact(Contact contact) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTermDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('删除 ${contact.name}？'),
+      builder: (context) => TermDialog(
+        title: '删除 ${contact.name}？',
+        tag: 'DANGER_',
+        width: 400,
         content: const Text('本机上与这位联系人的聊天记录会一并删除，且无法恢复。'),
         actions: [
           TextButton(
@@ -271,6 +336,7 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
             child: const Text('取消'),
           ),
           FilledButton(
+            style: AppTheme.dangerFilledButton,
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('删除'),
           ),
@@ -278,15 +344,21 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
       ),
     );
     if (confirmed != true) return;
-    await _services.removeContact(contact);
+    // 删的是正在看的人：先把右边收回空状态，聊天界面不再碰已删除的会话。
+    if (_selectedId == contact.deviceId && mounted) {
+      setState(() => _selectedId = null);
+    }
+    await (widget.removeContact ?? _services.removeContact)(contact);
     await _loadContacts();
   }
 
   Future<void> _clearAllData() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTermDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('清除全部数据？'),
+      builder: (context) => TermDialog(
+        title: '清除全部数据？',
+        tag: 'DANGER_',
+        width: 400,
         content: const Text(
           '本机上的聊天记录、联系人和你的身份都会被删除，且无法恢复。\n\n'
           '之后你会得到一个新的身份，需要和每位联系人重新配对。对方设备上的记录不受影响。',
@@ -297,6 +369,7 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
             child: const Text('取消'),
           ),
           FilledButton(
+            style: AppTheme.dangerFilledButton,
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('全部清除'),
           ),
@@ -305,6 +378,7 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
     );
     if (confirmed != true) return;
     String message = '已清除全部数据';
+    if (mounted) setState(() => _selectedId = null);
     try {
       await _services.clearAllData();
     } catch (_) {
@@ -316,118 +390,236 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// 「更多」菜单：贴着按钮下沿弹出。
+  Future<void> _openMoreMenu(BuildContext buttonContext) async {
+    final button = buttonContext.findRenderObject() as RenderBox;
+    final overlay =
+        Overlay.of(buttonContext).context.findRenderObject() as RenderBox;
+    final topLeft = button.localToGlobal(
+      Offset(0, button.size.height + 4),
+      ancestor: overlay,
+    );
+    final chosen = await showMenu<String>(
+      context: buttonContext,
+      constraints: const BoxConstraints(minWidth: 180),
+      position: RelativeRect.fromRect(
+        topLeft & button.size,
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem(
+          value: 'clear',
+          child: Text('清除全部数据…', style: TextStyle(color: AppTheme.alert)),
+        ),
+      ],
+    );
+    if (chosen == 'clear') await _clearAllData();
+  }
+
+  /// 窗口至少这么宽才分栏；再窄就退回单栏（先列表，点进去是整页聊天）。
+  static const double splitMinWidth = 720;
+  static const double _sidebarWidth = 300;
+
+  /// 边栏顶部的图标按钮：比默认的 48 小，三个才放得下。
+  static const double _headerButton = 34;
+
   @override
   Widget build(BuildContext context) {
-    final pendingRequests = _services.pairing.incomingRequests.length;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('联系人'),
-        shape: const Border(bottom: BorderSide(color: AppTheme.lightGray)),
-        actions: [
-          IconButton(
-            tooltip: '添加联系人 / 我的邀请码',
-            icon: const Icon(Icons.person_add_outlined, size: 20),
-            onPressed: _openPairing,
-          ),
-          IconButton(
-            tooltip: '关于',
-            icon: const Icon(Icons.info_outline, size: 20),
-            onPressed: () => unawaited(
-              showAboutWhisperDialog(
-                context,
-                autostart: Autostart.forPlatform(),
-                updater: GithubAppUpdater.forPlatform(),
-                onQuitForUpdate: _services.window.quit,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final selected = _selected;
+        if (constraints.maxWidth < splitMinWidth) {
+          return PaneSwitcher(
+            child: selected == null
+                ? KeyedSubtree(
+                    key: const ValueKey('contacts'),
+                    child: Scaffold(body: _buildSidebar(null)),
+                  )
+                : KeyedSubtree(
+                    key: ValueKey('chat-${selected.deviceId}'),
+                    child: _buildChat(selected, onBack: _closeChat),
+                  ),
+          );
+        }
+        return Scaffold(
+          body: Row(
+            children: [
+              SizedBox(width: _sidebarWidth, child: _buildSidebar(selected)),
+              const VerticalDivider(width: 1, thickness: 1),
+              Expanded(
+                child: PaneSwitcher(
+                  child: selected == null
+                      ? const _NoChatSelected(key: ValueKey('empty'))
+                      : KeyedSubtree(
+                          key: ValueKey('chat-${selected.deviceId}'),
+                          child: _buildChat(selected),
+                        ),
+                ),
               ),
-            ),
-          ),
-          PopupMenuButton<String>(
-            tooltip: '更多',
-            icon: const Icon(Icons.more_vert, size: 20),
-            onSelected: (_) => unawaited(_clearAllData()),
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: 'clear', child: Text('清除全部数据…')),
             ],
           ),
-        ],
-      ),
-      body: Column(
+        );
+      },
+    );
+  }
+
+  Widget _buildChat(Contact contact, {VoidCallback? onBack}) {
+    final builder = widget.chatBuilder;
+    if (builder != null) return builder(contact, onBack);
+    return ChatScreen(
+      // 换人就换一个新的聊天界面：没发出去的字不带到别人那里。
+      key: ValueKey('chat-${contact.deviceId}'),
+      contactName: contact.name,
+      contact: contact,
+      onBack: onBack,
+      onRead: () => unawaited(_loadContacts()),
+    );
+  }
+
+  Widget _buildSidebar(Contact? selected) {
+    final pendingRequests = _services.pairing.incomingRequests.length;
+    return ColoredBox(
+      color: AppTheme.panel,
+      child: Column(
         children: [
-          if (pendingRequests > 0)
-            InkWell(
-              onTap: _openPairing,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-                decoration: const BoxDecoration(
-                  color: AppTheme.surface,
-                  border: Border(
-                    bottom: BorderSide(color: AppTheme.lightGray, width: 1),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.person_add_outlined,
-                      size: 16,
-                      color: AppTheme.black,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '有 $pendingRequests 个配对请求等你处理',
-                        style: const TextStyle(
-                          color: AppTheme.black,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
+          SizedBox(
+            height: 64,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 20, right: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const Flexible(
+                    child: Text(
+                      '耳语',
+                      overflow: TextOverflow.clip,
+                      softWrap: false,
+                      style: TextStyle(
+                        color: AppTheme.text,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3,
                       ),
                     ),
-                    const Icon(
-                      Icons.chevron_right,
-                      size: 18,
-                      color: AppTheme.midGray,
+                  ),
+                  const SizedBox(width: 8),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: TagLabel('WHISPER_'),
+                  ),
+                  const Spacer(),
+                  TermIconButton(
+                    tooltip: '添加联系人 / 我的邀请码',
+                    size: _headerButton,
+                    icon: Icons.person_add_outlined,
+                    onPressed: _openPairing,
+                  ),
+                  TermIconButton(
+                    tooltip: '关于',
+                    size: _headerButton,
+                    icon: Icons.info_outline,
+                    onPressed: () => unawaited(
+                      showAboutWhisperDialog(
+                        context,
+                        autostart: Autostart.forPlatform(),
+                        updater: GithubAppUpdater.forPlatform(),
+                        onQuitForUpdate: _services.window.quit,
+                      ),
                     ),
-                  ],
+                  ),
+                  Builder(
+                    builder: (buttonContext) => TermIconButton(
+                      tooltip: '更多',
+                      size: _headerButton,
+                      icon: Icons.more_horiz,
+                      onPressed: () => unawaited(_openMoreMenu(buttonContext)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (pendingRequests > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+              child: InkWell(
+                onTap: _openPairing,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  decoration: const BoxDecoration(
+                    color: AppTheme.accentSoft,
+                    borderRadius: AppTheme.corners,
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.person_add_outlined,
+                        size: 16,
+                        color: AppTheme.accent,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '有 $pendingRequests 个配对请求等你处理',
+                          style: const TextStyle(
+                            color: AppTheme.accent,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.chevron_right,
+                        size: 18,
+                        color: AppTheme.accent,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          Expanded(child: _buildList()),
+          Expanded(child: _buildList(selected)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.shield_outlined,
+                  size: 14,
+                  color: AppTheme.text3,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'E2EE · X25519',
+                  style: AppTheme.mono(color: AppTheme.text3),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildList() {
+  Widget _buildList(Contact? selected) {
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.black),
-      );
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
     if (_contacts.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.people_outline, size: 40, color: AppTheme.lightGray),
-            SizedBox(height: 16),
-            Text(
-              '暂无联系人',
-              style: TextStyle(
-                color: AppTheme.black,
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            SizedBox(height: 6),
-            Text(
-              '点右上角的添加按钮，用邀请码添加亲友',
-              style: TextStyle(color: AppTheme.midGray, fontSize: 13),
-            ),
-          ],
+      return Center(
+        child: _EmptyState(
+          icon: Icons.person_add_outlined,
+          title: '暂无联系人',
+          subtitle: '用邀请码添加亲友',
+          action: FilledButton.icon(
+            onPressed: _openPairing,
+            icon: const Icon(Icons.person_add_outlined),
+            label: const Text('添加联系人'),
+          ),
         ),
       );
     }
@@ -437,12 +629,87 @@ class _ContactsListScreenState extends State<ContactsListScreen> {
         final contact = _contacts[index];
         return ContactItem(
           contact: contact,
-          online: _services.messaging.peerOnline(contact.sessionId),
+          online:
+              widget.isOnline?.call(contact) ??
+              _services.messaging.peerOnline(contact.sessionId),
           unread: _unreadFor(contact),
+          selected: selected?.deviceId == contact.deviceId,
           onTap: () => unawaited(_openChat(contact)),
           onDelete: () => unawaited(_deleteContact(contact)),
         );
       },
+    );
+  }
+}
+
+/// 分栏时还没选联系人，右边显示的内容。
+class _NoChatSelected extends StatelessWidget {
+  const _NoChatSelected({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const ColoredBox(
+      color: AppTheme.bg,
+      child: Center(
+        child: _EmptyState(
+          icon: Icons.chat_bubble_outline,
+          title: '选一个联系人开始聊天',
+          subtitle: '消息端到端加密，服务器看不到内容',
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.action,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: AppTheme.field,
+              borderRadius: AppTheme.corners,
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Icon(icon, size: 26, color: AppTheme.accent),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppTheme.text,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppTheme.text2, fontSize: 12.5),
+          ),
+          if (action != null) ...[const SizedBox(height: 18), action!],
+        ],
+      ),
     );
   }
 }
@@ -459,8 +726,8 @@ class _UnreadBadge extends StatelessWidget {
       constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
       padding: const EdgeInsets.symmetric(horizontal: 6),
       decoration: BoxDecoration(
-        color: AppTheme.black,
-        borderRadius: BorderRadius.circular(10),
+        color: AppTheme.alert,
+        borderRadius: AppTheme.corners,
       ),
       // 不用 Container 的 alignment：它会把角标撑满整行的高度。
       child: Center(
@@ -469,9 +736,9 @@ class _UnreadBadge extends StatelessWidget {
         child: Text(
           label,
           style: const TextStyle(
-            color: AppTheme.white,
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
+            color: AppTheme.onAlert,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),

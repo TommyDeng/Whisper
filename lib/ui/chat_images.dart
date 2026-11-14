@@ -7,7 +7,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-export '../files/image_file.dart' show isImageFileName;
+import 'app_theme.dart';
+
+export '../files/image_file.dart' show isImageFileName, isVideoFileName;
 
 /// 把剪贴板图片存成临时文件时用的扩展名；不认识的按 png。
 String clipboardImageExtension(String format) {
@@ -59,7 +61,19 @@ Future<void> showChatImageMenu(
   VoidCallback? onCopy,
   VoidCallback? onSave,
 }) async {
-  if (onCopy == null && onSave == null) return;
+  await showTermMenuAt(context, position, [
+    if (onCopy != null) (kCopyImageLabel, onCopy),
+    if (onSave != null) (kSaveImageLabel, onSave),
+  ]);
+}
+
+/// 在 [position]（全局坐标）弹出一个菜单，每项是（文字，点了做什么）。没有项时不弹。
+Future<void> showTermMenuAt(
+  BuildContext context,
+  Offset position,
+  List<(String, VoidCallback)> items,
+) async {
+  if (items.isEmpty) return;
   final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
   final chosen = await showMenu<VoidCallback>(
     context: context,
@@ -68,10 +82,8 @@ Future<void> showChatImageMenu(
       Offset.zero & overlay.size,
     ),
     items: [
-      if (onCopy != null)
-        PopupMenuItem(value: onCopy, child: const Text(kCopyImageLabel)),
-      if (onSave != null)
-        PopupMenuItem(value: onSave, child: const Text(kSaveImageLabel)),
+      for (final (label, action) in items)
+        PopupMenuItem(value: action, child: Text(label)),
     ],
   );
   chosen?.call();
@@ -84,7 +96,7 @@ void showChatImagePreview(
   VoidCallback? onCopy,
   VoidCallback? onSave,
 }) {
-  showDialog<void>(
+  showTermDialog<void>(
     context: context,
     builder: (context) => Dialog(
       insetPadding: const EdgeInsets.all(24),
@@ -118,16 +130,27 @@ void showChatImagePreview(
               ),
             ),
           ),
+          const Padding(
+            padding: EdgeInsets.only(top: 10),
+            child: Text(
+              '滚轮缩放 · 拖动平移 · 点图片或按 Esc 关闭',
+              style: TextStyle(color: AppTheme.text3, fontSize: 11.5),
+            ),
+          ),
           if (onCopy != null || onSave != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (onCopy != null)
-                    TextButton(
-                      onPressed: onCopy,
-                      child: const Text(kCopyImageLabel),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 10),
+                      child: TextButton(
+                        style: AppTheme.secondaryButton,
+                        onPressed: onCopy,
+                        child: const Text(kCopyImageLabel),
+                      ),
                     ),
                   if (onSave != null)
                     TextButton(

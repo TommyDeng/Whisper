@@ -19,7 +19,7 @@ Future<void> showPairingDialog(
   BuildContext context, {
   PairingManager? manager,
 }) {
-  return showDialog<void>(
+  return showTermDialog<void>(
     context: context,
     builder: (context) => PairingPage(manager: manager),
   );
@@ -65,6 +65,8 @@ class _PairingPageState extends State<PairingPage> {
       }),
     );
     _subscriptions.add(_manager.notices.listen(_onNotice));
+    // 已经有没用掉的邀请码就直接显示，不等下一帧。
+    _invitation = _manager.openInvitation;
     unawaited(_loadName());
     unawaited(_loadInvitation());
   }
@@ -165,33 +167,17 @@ class _PairingPageState extends State<PairingPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 不用 AlertDialog：它要算固有宽度，而二维码控件不支持。
-    return Dialog(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 440),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('添加联系人', style: Theme.of(context).textTheme.headlineSmall),
-              const SizedBox(height: 16),
-              Flexible(
-                child: SingleChildScrollView(child: _buildBody(context)),
-              ),
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('关闭'),
-                ),
-              ),
-            ],
-          ),
+    // TermDialog 不算固有宽度，二维码控件才放得进去。
+    return TermDialog(
+      title: '添加联系人',
+      tag: 'PAIR_',
+      content: _buildBody(context),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
         ),
-      ),
+      ],
     );
   }
 
@@ -207,11 +193,13 @@ class _PairingPageState extends State<PairingPage> {
         TextField(
           controller: _nameController,
           maxLength: 64,
-          decoration: const InputDecoration(
+          style: const TextStyle(color: AppTheme.text, fontSize: 14),
+          decoration: InputDecoration(
             hintText: '配对时显示给对方（可留空）',
-            border: OutlineInputBorder(),
             counterText: '',
             isDense: true,
+            prefixIcon: _prompt(),
+            prefixIconConstraints: const BoxConstraints(),
           ),
           onEditingComplete: () {
             unawaited(_saveName());
@@ -219,86 +207,156 @@ class _PairingPageState extends State<PairingPage> {
           },
           onTapOutside: (_) => unawaited(_saveName()),
         ),
-        _section('输入对方的邀请码'),
+        _section('让对方添加我'),
+        _buildInvitation(),
+        const SizedBox(height: 20),
+        const Row(
+          children: [
+            Expanded(child: Divider()),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 10),
+              child: TagLabel('// 添加对方', color: AppTheme.text3),
+            ),
+            Expanded(child: Divider()),
+          ],
+        ),
+        _section('输入对方的邀请码', top: 16),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
               child: TextField(
                 controller: _codeController,
+                style: AppTheme.mono(color: AppTheme.text, size: 13.5),
                 decoration: InputDecoration(
                   hintText: '粘贴邀请码',
-                  border: const OutlineInputBorder(),
                   isDense: true,
                   errorText: _joinError,
                   errorMaxLines: 2,
+                  prefixIcon: _prompt(),
+                  prefixIconConstraints: const BoxConstraints(),
                 ),
                 onSubmitted: (_) => unawaited(_join()),
               ),
             ),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed: _joining ? null : () => unawaited(_join()),
-              child: const Text('配对'),
+            const SizedBox(width: 10),
+            SizedBox(
+              height: 42,
+              child: FilledButton(
+                onPressed: _joining ? null : () => unawaited(_join()),
+                child: const Text('配对'),
+              ),
             ),
           ],
         ),
         for (final join in joins) _buildJoin(join),
-        _section('让对方添加我'),
-        _buildInvitation(),
       ],
     );
   }
 
-  Widget _section(String title, {bool first = false}) => Padding(
-    padding: EdgeInsets.only(top: first ? 0 : 20, bottom: 8),
+  /// 输入框开头的终端提示符。
+  Widget _prompt() => Padding(
+    padding: const EdgeInsets.only(left: 12, right: 8),
     child: Text(
-      title,
-      style: const TextStyle(
-        color: AppTheme.darkGray,
-        fontSize: 12,
-        fontWeight: FontWeight.w500,
+      '>',
+      style: AppTheme.mono(
+        color: AppTheme.accent,
+        size: 14,
+        weight: FontWeight.w600,
       ),
     ),
   );
 
+  Widget _section(String title, {bool first = false, double top = 20}) =>
+      Padding(
+        padding: EdgeInsets.only(top: first ? 0 : top, bottom: 8),
+        child: Text(
+          title,
+          style: const TextStyle(
+            color: AppTheme.text2,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      );
+
   Widget _buildRequest(IncomingPairRequest request) {
     final name = request.name.isEmpty ? '（未填名字）' : request.name;
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        border: Border.all(color: AppTheme.black, width: 1),
+        color: AppTheme.field,
+        borderRadius: AppTheme.corners,
+        border: Border.all(color: AppTheme.amber),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            '$name 请求添加你',
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          Row(
+            children: [
+              ContactMark(
+                name: request.name,
+                online: true,
+                ring: AppTheme.field,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$name 请求添加你',
+                      style: const TextStyle(
+                        color: AppTheme.text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      '安全码（和对方屏幕上的核对一致再批准）：',
+                      style: TextStyle(color: AppTheme.text2, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          const Text(
-            '安全码（和对方屏幕上的核对一致再批准）：',
-            style: TextStyle(color: AppTheme.darkGray, fontSize: 12),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.panel,
+              borderRadius: AppTheme.corners,
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: SelectableText(
+              request.safetyCode,
+              textAlign: TextAlign.center,
+              style: AppTheme.mono(
+                color: AppTheme.amber,
+                size: 15,
+                weight: FontWeight.w600,
+                letterSpacing: 1.5,
+                height: 1.6,
+              ),
+            ),
           ),
-          const SizedBox(height: 4),
-          SelectableText(
-            request.safetyCode,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
-          ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton(
+                style: AppTheme.dangerButton,
                 onPressed: () => _manager.reject(request.inviteId),
                 child: const Text('拒绝'),
               ),
-              const SizedBox(width: 8),
-              FilledButton(
+              const SizedBox(width: 10),
+              FilledButton.icon(
                 onPressed: () => unawaited(_manager.approve(request.inviteId)),
-                child: const Text('批准'),
+                icon: const Icon(Icons.done),
+                label: const Text('批准'),
               ),
             ],
           ),
@@ -314,20 +372,26 @@ class _PairingPageState extends State<PairingPage> {
       PairingStatus.responding => '正在完成配对…',
       _ => '处理中…',
     };
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: AppTheme.field,
+        borderRadius: AppTheme.corners,
+        border: Border.all(color: AppTheme.border),
+      ),
       child: Row(
         children: [
           const SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(strokeWidth: 1.5),
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 12),
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(fontSize: 12, color: AppTheme.darkGray),
+              style: const TextStyle(fontSize: 13.5, color: AppTheme.text),
             ),
           ),
           TextButton(
@@ -339,47 +403,126 @@ class _PairingPageState extends State<PairingPage> {
     );
   }
 
-  Widget _buildInvitation() {
-    final invitation = _invitation;
-    if (invitation == null) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Center(
-          child: _invitationError == null
-              ? const CircularProgressIndicator(strokeWidth: 2)
-              : TextButton(
-                  onPressed: () => unawaited(_loadInvitation()),
-                  child: Text('${_invitationError!}，点击重试'),
-                ),
+  /// 二维码只在邀请码变了时重画；配对状态一变整个对话框都会重建，二维码不跟着重算。
+  String? _qrCode;
+  Widget? _qr;
+
+  Widget _qrFor(String code) {
+    if (_qrCode != code || _qr == null) {
+      _qrCode = code;
+      // 二维码要深色码点配浅底，扫码的设备才认得出。
+      _qr = RepaintBoundary(
+        key: ValueKey(code),
+        child: QrImageView(
+          data: code,
+          size: _qrSize,
+          padding: const EdgeInsets.all(10),
+          backgroundColor: AppTheme.textBright,
+          eyeStyle: const QrEyeStyle(
+            eyeShape: QrEyeShape.square,
+            color: AppTheme.bg,
+          ),
+          dataModuleStyle: const QrDataModuleStyle(
+            dataModuleShape: QrDataModuleShape.square,
+            color: AppTheme.bg,
+          ),
         ),
       );
     }
-    final code = invitation.encode();
-    final registered = _manager.isRegistered(invitation);
+    return _qr!;
+  }
+
+  static const double _qrSize = 164;
+
+  /// 邀请码文本的样式；生成前用同样长度的占位文字撑住高度，生成后对话框不跳。
+  static final TextStyle _codeStyle = AppTheme.mono(
+    color: AppTheme.accent,
+    size: 12.5,
+    weight: FontWeight.w500,
+    height: 1.5,
+  );
+
+  /// 编码后的邀请码长度（1 + 32 + 16 + 4 字节的 Base32）。
+  static final String _codePlaceholder = 'X' * 85;
+
+  Widget _buildInvitation() {
+    final invitation = _invitation;
+    final code = invitation?.encode();
+    final registered = invitation != null && _manager.isRegistered(invitation);
+
+    // 还没生成时整块的大小和生成后一样，只是二维码位置先转圈，文字先透明占位。
+    final Widget qrSlot = code != null
+        ? _qrFor(code)
+        : SizedBox.square(
+            key: const ValueKey('qr-pending'),
+            dimension: _qrSize,
+            child: Center(
+              child: _invitationError == null
+                  ? const CircularProgressIndicator(strokeWidth: 2)
+                  : TextButton(
+                      onPressed: () => unawaited(_loadInvitation()),
+                      child: Text('${_invitationError!}，点击重试'),
+                    ),
+            ),
+          );
+
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Center(child: QrImageView(data: code, size: 180)),
-        const SizedBox(height: 8),
-        SelectableText(
-          code,
-          style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppTheme.accentSoft,
+            borderRadius: AppTheme.corners,
+            border: Border.all(color: AppTheme.accent),
+            boxShadow: AppTheme.glow,
+          ),
+          child: Column(
+            children: [
+              AnimatedSwitcher(duration: Motion.medium, child: qrSlot),
+              const SizedBox(height: 12),
+              if (code != null)
+                SelectableText(
+                  code,
+                  textAlign: TextAlign.center,
+                  style: _codeStyle,
+                )
+              else
+                Text(
+                  _codePlaceholder,
+                  textAlign: TextAlign.center,
+                  style: _codeStyle.copyWith(color: Colors.transparent),
+                ),
+            ],
+          ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
               child: Text(
-                registered ? '可以使用 · 24 小时内有效 · 只能用一次' : '正在连接中继，连上后对方才能使用…',
-                style: const TextStyle(color: AppTheme.midGray, fontSize: 12),
+                code == null
+                    ? '正在生成邀请码…'
+                    : registered
+                    ? '可以使用 · 24 小时内有效 · 只能用一次'
+                    : '正在连接中继，连上后对方才能使用…',
+                style: TextStyle(
+                  color: code == null || registered
+                      ? AppTheme.text2
+                      : AppTheme.amber,
+                  fontSize: 12,
+                ),
               ),
             ),
-            TextButton(
-              onPressed: () {
-                unawaited(Clipboard.setData(ClipboardData(text: code)));
-                _toast('邀请码已复制');
-              },
-              child: const Text('复制'),
+            OutlinedButton.icon(
+              onPressed: code == null
+                  ? null
+                  : () {
+                      unawaited(Clipboard.setData(ClipboardData(text: code)));
+                      _toast('邀请码已复制');
+                    },
+              icon: const Icon(Icons.copy),
+              label: const Text('复制'),
             ),
           ],
         ),

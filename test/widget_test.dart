@@ -5,6 +5,6 @@ void main() {
   testWidgets('shows whisper app shell', (tester) async {
     await tester.pumpWidget(const WhisperApp());
 
-    expect(find.text('联系人').first, findsOneWidget);
+    expect(find.text('耳语'), findsOneWidget);
   });
 }

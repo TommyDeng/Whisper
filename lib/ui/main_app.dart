@@ -1,8 +1,8 @@
 /// 耳语 Whisper - 主应用壳
 ///
-/// 首页是联系人列表；聊天从联系人进入，通话从聊天页发起。
+/// 首页是联系人列表加聊天的分栏；通话从聊天里发起。
 /// 通话条（[CallHost]）在窗口顶部，不挡住聊天输入和发文件；来电时不管停在哪一页都能看到。
-/// 黑白/单色细线条风格，桌面端优先。
+/// 霓虹终端风格，桌面端优先。
 library;
 
 import 'package:flutter/material.dart';
@@ -18,8 +18,9 @@ class WhisperApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: '耳语 Whisper',
-      theme: AppTheme.light,
-      builder: (context, child) => CallHost(child: child ?? const SizedBox.shrink()),
+      theme: AppTheme.dark,
+      builder: (context, child) =>
+          CallHost(child: child ?? const SizedBox.shrink()),
       home: const ContactsListScreen(),
     );
   }

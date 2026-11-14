@@ -16,3 +16,21 @@ String? imageExtension(String name) {
       ? ext
       : null;
 }
+
+/// 根据文件名判断是否是常见视频：聊天里画成可点的视频卡片，点开用系统播放器。
+bool isVideoFileName(String name) {
+  final dot = name.lastIndexOf('.');
+  if (dot < 0 || dot == name.length - 1) return false;
+  final ext = name.substring(dot + 1).toLowerCase();
+  return const {
+    'mp4',
+    'm4v',
+    'mov',
+    'webm',
+    'mkv',
+    'avi',
+    'wmv',
+    'flv',
+    '3gp',
+  }.contains(ext);
+}

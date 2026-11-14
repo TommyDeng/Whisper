@@ -2,7 +2,7 @@ name: whisper
 description: "耳语 Whisper：端到端加密聊天与语音客户端（Flutter，Windows / Linux 优先）。"
 publish_to: 'none'
 
-version: 1.0.8+10
+version: 1.0.9+11
 
 environment:
   sdk: ^3.13.7
@@ -47,6 +47,25 @@ flutter:
     - assets/icons/app_icon_unread.ico
     - assets/icons/whisper_blank.png
     - assets/icons/app_icon_blank.ico
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.ttf
+          weight: 700
+    - family: JetBrains Mono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/JetBrainsMono-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/JetBrainsMono-SemiBold.ttf
+          weight: 600
 
 # sqlite3 用带加密支持的 SQLite3 Multiple Ciphers 构建，本地数据库整库加密
 hooks:

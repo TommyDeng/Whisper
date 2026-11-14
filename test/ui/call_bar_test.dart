@@ -26,7 +26,7 @@ void main() {
     final now = DateTime(2026, 1, 1, 12, 0, 30);
     await tester.pumpWidget(
       MaterialApp(
-        theme: AppTheme.light,
+        theme: AppTheme.dark,
         home: Scaffold(
           body: Column(
             children: [
@@ -65,7 +65,7 @@ void main() {
     const inputKey = Key('chat-input');
     await tester.pumpWidget(
       MaterialApp(
-        theme: AppTheme.light,
+        theme: AppTheme.dark,
         home: Scaffold(
           body: Column(
             children: [
@@ -89,7 +89,7 @@ void main() {
 
   testWidgets('播放设备直接写在通话条上，不用悬停', (tester) async {
     Widget bar(CallAudioStats stats) => MaterialApp(
-      theme: AppTheme.light,
+      theme: AppTheme.dark,
       home: Scaffold(
         body: CallBar(
           snapshot: CallSnapshot(

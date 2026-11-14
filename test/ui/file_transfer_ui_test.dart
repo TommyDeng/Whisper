@@ -544,7 +544,7 @@ void main() {
     Future<void> pumpChat(WidgetTester tester, {Contact? contact}) async {
       await tester.pumpWidget(
         MaterialApp(
-          theme: AppTheme.light,
+          theme: AppTheme.dark,
           home: ChatScreen(
             key: UniqueKey(),
             contactName: 'Bob',
@@ -576,8 +576,8 @@ void main() {
     testWidgets('阅后即焚开启时禁用发文件并给出说明', (tester) async {
       await pumpChat(tester, contact: bobContact.copyWith(burnAfterRead: true));
       expect(find.byTooltip(kBurnDisablesFileSend), findsOneWidget);
-      final button = tester.widget<IconButton>(
-        find.widgetWithIcon(IconButton, Icons.attach_file),
+      final button = tester.widget<TermIconButton>(
+        find.widgetWithIcon(TermIconButton, Icons.attach_file),
       );
       expect(button.onPressed, isNull);
       expect(find.byTooltip('发送文件'), findsNothing);
@@ -884,7 +884,7 @@ void main() {
 
 Widget _wrap(Widget child) {
   return MaterialApp(
-    theme: AppTheme.light,
+    theme: AppTheme.dark,
     home: Scaffold(
       body: Center(child: SizedBox(width: 400, child: child)),
     ),
