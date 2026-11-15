@@ -100,10 +100,12 @@ void main() {
     );
   });
 
-  test('chime 播放一次来信提示音', () async {
+  test('chime 播放一次来信提示音；间隔够长的两次来信各响一次', () async {
     final player = _FakePlayer();
-    final sound = MessageSound(player: player);
+    var clock = DateTime(2026, 11, 15, 12);
+    final sound = MessageSound(player: player, now: () => clock);
     await sound.chime();
+    clock = clock.add(const Duration(seconds: 3));
     await sound.chime();
     await sound.dispose();
     expect(player.log, [
@@ -111,5 +113,18 @@ void main() {
       'once:$kMessageChimeAsset',
       'dispose',
     ]);
+  });
+
+  test('短时间内连着来的事件（文件邀约后紧跟文件消息）只响一次，不互相打断', () async {
+    final player = _FakePlayer();
+    var clock = DateTime(2026, 11, 15, 12);
+    final sound = MessageSound(player: player, now: () => clock);
+    await sound.chime();
+    clock = clock.add(const Duration(milliseconds: 300));
+    await sound.chime();
+    clock = clock.add(const Duration(milliseconds: 1500));
+    await sound.chime();
+    await sound.dispose();
+    expect(player.log, ['once:$kMessageChimeAsset', 'dispose']);
   });
 }

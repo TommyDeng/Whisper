@@ -21,6 +21,7 @@ import '../relay/session_client.dart';
 import 'app_theme.dart';
 import 'chat_text.dart';
 import 'clipboard_image.dart';
+import 'file_drop.dart';
 import 'file_transfer_ui.dart';
 
 /// 聊天气泡
@@ -168,6 +169,8 @@ class _ChatScreenState extends State<ChatScreen> {
   Map<String, String> _localPaths = {};
   late bool _verified = widget.contact.isVerified;
   late bool _burn = widget.contact.burnAfterRead;
+  bool _dropHover = false; // 正有文件拖到窗口上方
+  Future<void> _dropQueue = Future<void>.value(); // 拖进来的文件一个接一个发
   bool _isLoading = true;
   bool _reloading = false;
   bool _reloadAgain = false;
@@ -640,42 +643,99 @@ class _ChatScreenState extends State<ChatScreen> {
     final incoming = _files.incoming(_sessionId);
     return Scaffold(
       backgroundColor: AppTheme.bg,
-      body: Column(
-        children: [
-          _buildHeader(),
-          Expanded(child: _buildMessages()),
-          for (final state in uploads)
-            FileUploadTile(
-              key: ValueKey('upload-${state.id}'),
-              name: state.name,
-              done: state.done,
-              total: state.total,
-              error: state.error,
-              isDirect: state.isDirect,
-              onCancel: () => _files.cancel(state.id),
-            ),
-          for (final state in incoming)
-            FileIncomingTile(
-              key: ValueKey('incoming-${state.id}'),
-              name: state.name,
-              size: state.total,
-              done: state.done,
-              total: state.total,
-              error: state.error,
-              needsAccept: state.needsAccept,
-              onAccept: state.needsAccept
-                  ? () => unawaited(_acceptIncoming(state))
-                  : null,
-              onDecline: state.needsAccept
-                  ? () => _files.declineIncoming(state.id)
-                  : null,
-              onCancel: state.needsAccept
-                  ? null
-                  : () => _files.cancel(state.id),
-            ),
-          _buildComposer(),
-        ],
+      body: FileDropTarget(
+        onHover: (hover) {
+          if (!mounted || hover == _dropHover) return;
+          setState(() => _dropHover = hover);
+        },
+        onFile: _onFileDropped,
+        child: Stack(
+          children: [
+            _buildBody(uploads, incoming),
+            if (_dropHover) Positioned.fill(child: _buildDropHint()),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildDropHint() {
+    return IgnorePointer(
+      child: Container(
+        margin: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.scrim,
+          borderRadius: AppTheme.corners,
+          border: Border.all(color: AppTheme.accent, width: 2),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          _burn ? '阅后即焚模式下不能发文件' : '松开发送给 ${widget.contactName}',
+          style: TextStyle(
+            color: _burn ? AppTheme.alert : AppTheme.accent,
+            fontSize: 16,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 拖进窗口的文件：按松手时的顺序一个接一个发出去。
+  void _onFileDropped(String path) {
+    _dropQueue = _dropQueue.then((_) => _sendDropped(path));
+  }
+
+  Future<void> _sendDropped(String path) async {
+    if (!mounted) return;
+    if (_burn) {
+      _toast('阅后即焚模式下不能发文件。');
+      return;
+    }
+    if (await FileSystemEntity.isDirectory(path)) {
+      _toast('不能发送文件夹：${p.basename(path)}');
+      return;
+    }
+    if (!mounted) return;
+    await _sendFileFromPath(path);
+  }
+
+  Widget _buildBody(
+    List<FileTransferState> uploads,
+    List<FileTransferState> incoming,
+  ) {
+    return Column(
+      children: [
+        _buildHeader(),
+        Expanded(child: _buildMessages()),
+        for (final state in uploads)
+          FileUploadTile(
+            key: ValueKey('upload-${state.id}'),
+            name: state.name,
+            done: state.done,
+            total: state.total,
+            error: state.error,
+            isDirect: state.isDirect,
+            onCancel: () => _files.cancel(state.id),
+          ),
+        for (final state in incoming)
+          FileIncomingTile(
+            key: ValueKey('incoming-${state.id}'),
+            name: state.name,
+            size: state.total,
+            done: state.done,
+            total: state.total,
+            error: state.error,
+            needsAccept: state.needsAccept,
+            onAccept: state.needsAccept
+                ? () => unawaited(_acceptIncoming(state))
+                : null,
+            onDecline: state.needsAccept
+                ? () => _files.declineIncoming(state.id)
+                : null,
+            onCancel: state.needsAccept ? null : () => _files.cancel(state.id),
+          ),
+        _buildComposer(),
+      ],
     );
   }
 

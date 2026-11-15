@@ -218,6 +218,16 @@ void main() {
     expect(await saved.readAsBytes(), await file.readAsBytes());
   });
 
+  test('直传来的图片自动接收时也发出来传事件（用来响提示音）', () async {
+    final arrivals = <String>[];
+    final sub = bobFiles.incomingArrivals.listen(arrivals.add);
+    addTearDown(sub.cancel);
+    final image = await source('ping.png', 2048);
+    expect(await aliceFiles.sendDirect(bobContact, image), isNotNull);
+    await savedImages(1);
+    expect(arrivals, [aliceContact.sessionId]);
+  });
+
   test('超过自动接收上限的图片仍然等用户确认', () async {
     await bobFiles.dispose();
     bobFiles = FileShareService(
