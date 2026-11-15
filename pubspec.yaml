@@ -28,6 +28,7 @@ dependencies:
   url_launcher: ^6.3.2
   web_socket_channel: ^3.0.3
   window_manager: ^0.5.1
+  super_drag_and_drop: ^0.8.24
 
 dev_dependencies:
   fake_async: ^1.3.3

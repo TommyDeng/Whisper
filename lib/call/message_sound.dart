@@ -26,14 +26,29 @@ bool shouldPlayMessageSound({
   return true;
 }
 
-/// 播放一次来信提示音。播放器可注入。
+/// 播放来信提示音。播放器和时钟可注入。
+///
+/// [minGap] 内的连续来信只响一次：文件到达时会先后来两个事件（直传邀约、传完后的文件消息），
+/// 第二次播放会先 stop 掉第一次，Windows 上 stop 会释放还没开始出声的音源，结果一声都听不到。
 class MessageSound {
-  MessageSound({CallSoundPlayer? player}) : _player = player ?? AudioplayersCallSoundPlayer();
+  MessageSound({
+    CallSoundPlayer? player,
+    DateTime Function()? now,
+    this.minGap = const Duration(seconds: 2),
+  }) : _player = player ?? AudioplayersCallSoundPlayer(),
+       _now = now ?? DateTime.now;
 
   final CallSoundPlayer _player;
+  final DateTime Function() _now;
+  final Duration minGap;
+  DateTime? _lastChime;
   Future<void> _queue = Future<void>.value();
 
   Future<void> chime() {
+    final now = _now();
+    final last = _lastChime;
+    if (last != null && now.difference(last) < minGap) return _queue;
+    _lastChime = now;
     _queue = _queue.then((_) => _player.playOnce(kMessageChimeAsset));
     return _queue;
   }
