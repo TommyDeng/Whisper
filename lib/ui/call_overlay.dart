@@ -11,6 +11,7 @@ import '../call/call_audio.dart';
 import '../call/call_service.dart';
 import '../call/call_sound.dart';
 import '../call/message_sound.dart';
+import '../messaging/call_record.dart';
 import '../voice/ice_strategy.dart';
 import 'app_theme.dart';
 
@@ -40,6 +41,9 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
   final _messageSound = MessageSound();
   Timer? _ticker;
   Timer? _autoDismiss;
+
+  /// 已经写进聊天记录的那通通话的 callId，用来每通只记一条。
+  String? _recordedCallId;
   IcePathType? _path;
   double _micLevel = 0;
   RTCVideoRenderer? _remoteRenderer;
@@ -144,6 +148,7 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
     _autoDismiss?.cancel();
     _autoDismiss = null;
     if (snapshot.phase == CallPhase.ended) {
+      _recordCall(snapshot);
       final callId = snapshot.callId;
       _autoDismiss = Timer(const Duration(seconds: 3), () {
         final current = _services.calls.snapshot;
@@ -151,6 +156,57 @@ class _CallHostState extends State<CallHost> with WidgetsBindingObserver {
           _services.calls.dismiss();
         }
       });
+    }
+  }
+
+  /// 通话结束时把结果写进聊天记录（本地）。每通只记一条。
+  void _recordCall(CallSnapshot snapshot) {
+    final callId = snapshot.callId;
+    final contact = snapshot.contact;
+    if (callId == null || contact == null || callId == _recordedCallId) return;
+    final record = _callRecordFor(snapshot);
+    if (record == null) return;
+    _recordedCallId = callId;
+    unawaited(_services.messaging.recordCall(contact, record));
+  }
+
+  CallRecord? _callRecordFor(CallSnapshot snapshot) {
+    final outgoing = snapshot.isOutgoing;
+    final connectedAt = snapshot.connectedAt;
+    switch (snapshot.endReason) {
+      case CallEndReason.hangup:
+      case CallEndReason.remoteHangup:
+        if (connectedAt != null) {
+          return CallRecord(
+            outgoing: outgoing,
+            outcome: CallOutcome.completed,
+            duration: DateTime.now().difference(connectedAt),
+          );
+        }
+        // 没接通就挂了：自己呼出算取消，来电算未接。
+        return CallRecord(
+          outgoing: outgoing,
+          outcome: outgoing ? CallOutcome.canceled : CallOutcome.missed,
+        );
+      case CallEndReason.rejected:
+        return CallRecord(outgoing: outgoing, outcome: CallOutcome.rejected);
+      case CallEndReason.declined:
+        return CallRecord(outgoing: outgoing, outcome: CallOutcome.declined);
+      case CallEndReason.busy:
+        return CallRecord(outgoing: outgoing, outcome: CallOutcome.busy);
+      case CallEndReason.offline:
+        return CallRecord(outgoing: outgoing, outcome: CallOutcome.offline);
+      case CallEndReason.timeout:
+        return CallRecord(outgoing: outgoing, outcome: CallOutcome.noAnswer);
+      case CallEndReason.missed:
+        return const CallRecord(
+          outgoing: false,
+          outcome: CallOutcome.missed,
+        );
+      case CallEndReason.failed:
+        return CallRecord(outgoing: outgoing, outcome: CallOutcome.failed);
+      case null:
+        return null;
     }
   }
 

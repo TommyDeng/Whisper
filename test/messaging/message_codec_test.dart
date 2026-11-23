@@ -134,4 +134,18 @@ void main() {
     expect(ids, hasLength(100));
     expect(ids.every(RegExp(r'^[A-Za-z0-9_-]{22}$').hasMatch), isTrue);
   });
+
+  test('通话记录正文原样往返', () async {
+    const body = '{"out":true,"kind":"completed","dur":323}';
+    final payload = await MessageCodec.seal(
+      key: aliceKey,
+      sessionId: sessionId,
+      senderRole: 'a',
+      messageId: 'm1',
+      content: ChatContent.callLog(body, sentAt: 9),
+    );
+    final content = await open(payload);
+    expect(content.type, ChatContent.typeCallLog);
+    expect(content.body, body);
+  });
 }

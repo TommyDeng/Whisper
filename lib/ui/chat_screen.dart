@@ -15,10 +15,12 @@ import '../app_services.dart';
 import '../contact/contact.dart';
 import '../files/file_send_plan.dart';
 import '../files/file_share_service.dart';
+import '../messaging/call_record.dart';
 import '../messaging/message_codec.dart';
 import '../messaging/messaging_service.dart';
 import '../relay/session_client.dart';
 import 'app_theme.dart';
+import 'call_overlay.dart' show formatCallDuration;
 import 'chat_text.dart';
 import 'clipboard_image.dart';
 import 'file_drop.dart';
@@ -114,6 +116,105 @@ class ChatBubble extends StatelessWidget {
   }
 }
 
+/// 聊天记录里的一条通话记录：图标 + 文字（如“通话时长 05:23”“未接来电”）。
+class CallMessageBody extends StatelessWidget {
+  const CallMessageBody({
+    super.key,
+    required this.record,
+    required this.isSent,
+  });
+
+  final CallRecord record;
+  final bool isSent;
+
+  @override
+  Widget build(BuildContext context) {
+    final display = callRecordDisplay(record);
+    final textColor = isSent ? AppTheme.sentText : AppTheme.text;
+    final iconColor = display.alert
+        ? AppTheme.alert
+        : (isSent ? AppTheme.sentText : AppTheme.text2);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(display.icon, size: 16, color: iconColor),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            display.text,
+            style: TextStyle(
+              color: textColor,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              fontFeatures: AppTheme.tabularFigures,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 一条通话记录在界面上的图标、文字和是否用警示色（未接 / 失败）。纯函数，便于测试。
+({IconData icon, String text, bool alert}) callRecordDisplay(
+  CallRecord record,
+) {
+  switch (record.outcome) {
+    case CallOutcome.completed:
+      return (
+        icon: record.outgoing ? Icons.call_made : Icons.call_received,
+        text: '通话时长 ${formatCallDuration(record.duration ?? Duration.zero)}',
+        alert: false,
+      );
+    case CallOutcome.canceled:
+      return (icon: Icons.call_made, text: '已取消', alert: false);
+    case CallOutcome.missed:
+      return (icon: Icons.call_missed, text: '未接来电', alert: true);
+    case CallOutcome.rejected:
+      return (icon: Icons.call_made, text: '对方已拒接', alert: false);
+    case CallOutcome.declined:
+      return (icon: Icons.call_received, text: '已拒接', alert: false);
+    case CallOutcome.busy:
+      return (icon: Icons.call_made, text: '对方忙线中', alert: false);
+    case CallOutcome.offline:
+      return (icon: Icons.call_made, text: '对方不在线', alert: false);
+    case CallOutcome.noAnswer:
+      return (icon: Icons.call_made, text: '无人接听', alert: false);
+    case CallOutcome.failed:
+      return (icon: Icons.call_end, text: '通话失败', alert: true);
+  }
+}
+
+/// 向上翻聊天记录时右下角浮出的“回到底部”按钮。
+class _JumpToBottomButton extends StatelessWidget {
+  const _JumpToBottomButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppTheme.panel,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(22),
+        side: const BorderSide(color: AppTheme.border),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: onTap,
+        child: const Padding(
+          padding: EdgeInsets.all(9),
+          child: Icon(
+            Icons.keyboard_arrow_down,
+            size: 24,
+            color: AppTheme.text2,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 聊天界面
 class ChatScreen extends StatefulWidget {
   final String contactName;
@@ -163,6 +264,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   final _textController = TextEditingController();
   final _focusNode = FocusNode();
+  final _scrollController = ScrollController();
+
+  /// 消息列表是 reverse，最新的在 offset 0；向上翻超过这个距离才显示“回到底部”。
+  static const double _jumpThreshold = 240;
+  bool _showJumpToBottom = false;
   StreamSubscription<String>? _messageSub;
   StreamSubscription<String>? _fileSub;
   List<ChatMessage> _messages = [];
@@ -192,9 +298,30 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) setState(() {});
       unawaited(_loadLocalPaths());
     });
+    _scrollController.addListener(_onScroll);
     unawaited(_loadMessages());
     unawaited(_loadLocalPaths());
     AppServices.instance.uiFocus.enterSession(_sessionId);
+  }
+
+  void _onScroll() {
+    final show =
+        _scrollController.hasClients &&
+        _scrollController.offset > _jumpThreshold;
+    if (show != _showJumpToBottom && mounted) {
+      setState(() => _showJumpToBottom = show);
+    }
+  }
+
+  void _jumpToBottom() {
+    if (!_scrollController.hasClients) return;
+    unawaited(
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOut,
+      ),
+    );
   }
 
   @override
@@ -208,6 +335,7 @@ class _ChatScreenState extends State<ChatScreen> {
           .purgeBurned(sessionId: _sessionId)
           .then<void>((_) {}, onError: (_) {}),
     );
+    _scrollController.dispose();
     _textController.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -937,14 +1065,39 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       );
     }
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-      reverse: true,
-      itemCount: _messages.length,
-      itemBuilder: (context, index) {
-        final message = _messages[_messages.length - 1 - index];
-        final file = message.file;
-        if (file != null) {
+    return Stack(
+      children: [
+        ListView.builder(
+          controller: _scrollController,
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          reverse: true,
+          itemCount: _messages.length,
+          itemBuilder: _buildMessageItem,
+        ),
+        if (_showJumpToBottom)
+          Positioned(
+            right: 18,
+            bottom: 14,
+            child: _JumpToBottomButton(onTap: _jumpToBottom),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildMessageItem(BuildContext context, int index) {
+    final message = _messages[_messages.length - 1 - index];
+    final call = message.call;
+    if (call != null) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: ChatBubble(
+          isSent: call.outgoing,
+          child: CallMessageBody(record: call, isSent: call.outgoing),
+        ),
+      );
+    }
+    final file = message.file;
+    if (file != null) {
           final path = _localPaths[message.id];
           final download = _files.downloadState(message.id);
           return Padding(
@@ -1004,7 +1157,5 @@ class _ChatScreenState extends State<ChatScreen> {
             burn: message.burn,
           ),
         );
-      },
-    );
   }
 }
