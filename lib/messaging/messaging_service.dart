@@ -14,6 +14,7 @@ import '../identity/identity_store.dart';
 import '../relay/relay_transport.dart';
 import '../relay/session_client.dart';
 import '../storage/local_db.dart';
+import 'call_record.dart';
 import 'message_codec.dart';
 
 /// 自己发出的消息的状态。
@@ -27,6 +28,7 @@ class ChatMessage {
     required this.timestamp,
     required this.text,
     this.file,
+    this.call,
     this.status,
     this.burn = false,
   });
@@ -35,11 +37,14 @@ class ChatMessage {
   final bool isSent;
   final int timestamp;
 
-  /// 正文。文件消息或解不开（例如身份已重置）时为 null。
+  /// 正文。文件消息、通话记录或解不开（例如身份已重置）时为 null。
   final String? text;
 
   /// 文件消息的文件描述；其它消息为 null。
   final FileOffer? file;
+
+  /// 通话记录；其它消息为 null。
+  final CallRecord? call;
 
   /// 仅自己发出的消息有。
   final OutgoingStatus? status;
@@ -48,7 +53,7 @@ class ChatMessage {
   final bool burn;
 }
 
-typedef _Plain = ({String? text, FileOffer? file});
+typedef _Plain = ({String? text, FileOffer? file, CallRecord? call});
 
 class _Session {
   _Session(this.contact, this.client, this.key);
@@ -247,6 +252,7 @@ class MessagingService {
     await _send(contact, ChatContent.text(text, sentAt: now, burn: burn), (
       text: text,
       file: null,
+      call: null,
     ));
   }
 
@@ -257,7 +263,48 @@ class MessagingService {
     return _send(contact, ChatContent.file(offer.encode(), sentAt: now), (
       text: null,
       file: offer,
+      call: null,
     ));
+  }
+
+  /// 把一通通话的结果记进本地聊天记录。只落库、不经网络发送：呼叫方和被叫方各记一条。
+  /// [record] 的 `outgoing` 决定这条记录算自己发出（`sent`）还是收到（`received`）。
+  /// 未接来电记为未读，其余记为已读。会话还没建立也能记（用静态派生的会话密钥）。
+  Future<void> recordCall(Contact contact, CallRecord record) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final session = _sessions[contact.sessionId];
+    final id = MessageCodec.newMessageId();
+    // sealing 用的角色要和 _read 按 direction 选的角色一致，记录才解得开。
+    final senderRole = record.outgoing ? contact.peerRole : contact.remoteRole;
+    final key = await (session?.key ?? _deriveKey(contact));
+    final payload = await MessageCodec.seal(
+      key: key,
+      sessionId: contact.sessionId,
+      senderRole: senderRole,
+      messageId: id,
+      content: ChatContent.callLog(record.encode(), sentAt: now),
+    );
+    final me = await identity();
+    final isMissed =
+        !record.outgoing && record.outcome == CallOutcome.missed;
+    await LocalDatabase.insertMessage(
+      StoredMessage(
+        msgId: id,
+        sessionId: contact.sessionId,
+        senderPublicKey: record.outgoing
+            ? me.x25519PublicKeyBase64
+            : contact.x25519PublicKeyBase64,
+        ciphertext: payload,
+        sequenceNumber: 0,
+        timestamp: now,
+        direction: record.outgoing ? 'sent' : 'received',
+        // 未接来电算未读（联系人列表红点）；其余已读。
+        read: !isMissed,
+      ),
+    );
+    _plaintext[id] = (text: null, file: null, call: record);
+    await ContactStore.updateContactLastMessageTime(contact.deviceId, now);
+    _notify(contact.sessionId);
   }
 
   Future<String> _send(
@@ -333,6 +380,7 @@ class MessagingService {
           timestamp: message.timestamp,
           text: plain?.text,
           file: plain?.file,
+          call: plain?.call,
           status: isSent ? _status(message) : null,
           burn: message.burnAfterRead,
         ),
@@ -505,15 +553,22 @@ class MessagingService {
     );
   }
 
-  /// 文本或文件消息解密后的内容；其它类型和不合格的文件描述返回 null。
+  /// 文本、文件或通话记录解密后的内容；其它类型和不合格的内容返回 null。
   static _Plain? _plain(ChatContent content) {
-    if (content.type == ChatContent.typeText) return (text: content.body, file: null);
+    if (content.type == ChatContent.typeText) {
+      return (text: content.body, file: null, call: null);
+    }
     if (content.type == ChatContent.typeFile) {
       try {
-        return (text: null, file: FileOffer.decode(content.body));
+        return (text: null, file: FileOffer.decode(content.body), call: null);
       } on FormatException {
         return null;
       }
+    }
+    if (content.type == ChatContent.typeCallLog) {
+      final record = CallRecord.decode(content.body);
+      if (record == null) return null;
+      return (text: null, file: null, call: record);
     }
     return null;
   }
@@ -584,6 +639,9 @@ class MessagingService {
       ));
       return;
     }
+
+    // 通话记录只由本端 recordCall 产生；网络上来的 calllog 一律丢弃，防对端伪造记录。
+    if (content.type == ChatContent.typeCallLog) return;
 
     // 文本和文件消息才进聊天记录；不认识的类型和不合格的文件描述丢弃（照常确认）。
     final plain = _plain(content);

@@ -398,6 +398,8 @@ void main() {
       transport.receive(bob, CallSignal.end(callId, CallSignal.reasonHangup));
       await phase(CallPhase.ended);
       expect(service.snapshot.endReason, CallEndReason.remoteHangup);
+      // 结束后仍保留接通时刻，界面才能算出通话时长写进通话记录。
+      expect(service.snapshot.connectedAt, isNotNull);
       expect(medias.single.closed, isTrue);
     });
 

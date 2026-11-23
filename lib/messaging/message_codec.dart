@@ -55,11 +55,22 @@ class ChatContent {
       receiptKind = null,
       ids = const [];
 
+  /// 通话记录：[body] 描述一通通话的结果。只在本地落库，不经网络发送。
+  const ChatContent.callLog(this.body, {required this.sentAt})
+    : type = typeCallLog,
+      burn = false,
+      receiptKind = null,
+      ids = const [];
+
   static const String typeText = 'text';
   static const String typeFile = 'file';
   static const String typeReceipt = 'receipt';
   static const String typeCall = 'call';
   static const String typeFileSignal = 'fsig';
+
+  /// 通话记录：[body] 是一通通话的结果（见 CallRecord）。只在本地落库、从不经网络发送：
+  /// 每端按自己的视角各记一条。
+  static const String typeCallLog = 'calllog';
 
   static const String receiptDelivered = 'delivered';
   static const String receiptRead = 'read';
@@ -67,7 +78,8 @@ class ChatContent {
   /// 一条回执最多带多少个消息 ID。
   static const int maxReceiptIds = 100;
 
-  /// 内容类型：[typeText]、[typeFile]、[typeReceipt]、[typeCall] 或 [typeFileSignal]；不认识的类型由接收方忽略。
+  /// 内容类型：[typeText]、[typeFile]、[typeReceipt]、[typeCall]、[typeFileSignal] 或
+  /// [typeCallLog]；不认识的类型由接收方忽略。
   final String type;
   final String body;
 

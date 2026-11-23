@@ -493,6 +493,7 @@ class CallService {
     final callId = _snapshot.callId;
     final contact = _snapshot.contact;
     final isOutgoing = _snapshot.isOutgoing;
+    final connectedAt = _snapshot.connectedAt;
 
     _ringTimer?.cancel();
     _ringTimer = null;
@@ -508,6 +509,8 @@ class CallService {
       contact: contact,
       callId: callId,
       isOutgoing: isOutgoing,
+      // 保留接通时刻，结束后界面才能算出通话时长、写进通话记录。
+      connectedAt: connectedAt,
       endReason: reason,
     ));
   }
