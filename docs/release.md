@@ -42,7 +42,7 @@ Windows 安装包没有购买代码签名证书，SmartScreen 可能提示“Win
 1. 确认要发布的提交已经在 `main` 上（通过 PR 合并）。
 2. 确认 `pubspec.yaml` 的 `version:` 是你想发的发行号，例如 `1.0.0+1`。以后升版本时改这里，再开 PR 合并。
 3. 按上一节配置好 `GPG_PRIVATE_KEY` 和 `GPG_PASSPHRASE`。
-4. 在本地对已合并的 `main` 打标签并推送（不要由机器人代打）：
+4. 在本地对已合并的 `main` 打标签并推送：
 
    ```bash
    git checkout main
